@@ -1,0 +1,9 @@
+name: proof-dev
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - libcxx=22.1.8
+  - libzlib=1.3.2
+  - opam=2.5.0
+  - zstd=1.5.7

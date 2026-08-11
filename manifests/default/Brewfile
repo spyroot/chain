@@ -1,0 +1,234 @@
+# Static analysis and lint tool, for (ba)sh scripts
+brew "shellcheck"
+# Static checker for GitHub Actions workflow files
+brew "actionlint"
+# Codec library for encoding and decoding AV1 video streams
+brew "aom"
+# Bourne-Again SHell, a UNIX command interpreter
+brew "bash"
+# Bash Automated Testing System
+brew "bats-core"
+# Generate compilation database for clang tooling
+brew "bear"
+# Software library to render fonts
+brew "freetype"
+# Development kit for the Java programming language
+brew "openjdk"
+# Remove large files or passwords from Git history like git-filter-branch
+brew "bfg"
+# GNU binary tools for native development
+brew "binutils"
+# Toolchain of the web
+brew "biome"
+# Collection of portable C++ source libraries
+brew "boost"
+# Audit Cargo.lock files for crates with security vulnerabilities
+brew "cargo-audit"
+# Cargo plugin for linting your dependencies
+brew "cargo-deny"
+# Cargo subcommand to easily use LLVM source-based code coverage
+brew "cargo-llvm-cov"
+# Next-generation test runner for Rust
+brew "cargo-nextest"
+# Modern, C++-native, test framework
+brew "catch2"
+# Object-file caching compiler wrapper
+brew "ccache"
+# CD/DVD/Blu-ray premastering and recording software
+brew "cdrtools"
+# JSON Schema CLI
+brew "check-jsonschema"
+# Formatting tools for C, C++, Obj-C, Java, JavaScript, TypeScript
+brew "clang-format"
+# Cross-platform make
+brew "cmake"
+# Unit testing framework for C
+brew "cmocka"
+# GNU File, Shell, and Text utilities
+brew "coreutils"
+# Static analysis of C and C++ code
+brew "cppcheck"
+# C library of Git core methods that is re-entrant and linkable
+brew "libgit2"
+# Cross-platform C and C++ unit testing framework for the 21st century
+brew "criterion"
+# Get a file from an HTTP, HTTPS or FTP server
+brew "curl"
+# Utilities for converting macOS DMG images
+brew "dmg2img"
+# Feature-rich C++11/14/17/20/23 single-header testing framework
+brew "doctest"
+# C++ template library for linear algebra
+brew "eigen"
+# Simple, fast and user-friendly alternative to find
+brew "fd"
+# Play, record, convert, and stream select audio and video codecs
+brew "ffmpeg"
+# Command-line fuzzy finder written in Go
+brew "fzf"
+# GNU compiler collection
+brew "gcc"
+# GitHub command-line tool
+brew "gh"
+# Library for JPEG-2000 image manipulation
+brew "openjpeg"
+# Image processing and image analysis library
+brew "leptonica"
+# OCR (Optical Character Recognition) engine
+brew "tesseract"
+# Interpreter for PostScript and PDF
+brew "ghostscript"
+# Git extension for versioning large files
+brew "git-lfs"
+# Audit git repos for secrets
+brew "gitleaks"
+# GNU Transport Layer Security (TLS) Library
+brew "gnutls"
+# Open source programming language to build simple/reliable/efficient software
+brew "go"
+# Stricter gofmt
+brew "gofumpt"
+# Fast linters runner for Go
+brew "golangci-lint"
+# Google Testing and Mocking Framework
+brew "googletest"
+# Golang security checker
+brew "gosec"
+# Human friendly `go test` runner
+brew "gotestsum"
+# Database client and tools for the Go vulnerability database
+brew "govulncheck"
+# Smarter Dockerfile linter to validate best practices
+brew "hadolint"
+# Kubernetes package manager
+brew "helm"
+# Improved top (interactive process viewer)
+brew "htop"
+# Command-line benchmarking tool
+brew "hyperfine"
+# Generic library support script
+brew "libtool"
+# Tools and libraries to manipulate images in select formats
+brew "imagemagick"
+# Next-gen compiler infrastructure
+brew "llvm"
+# Tool to analyze #includes in C and C++ source files
+brew "include-what-you-use"
+# Utility for IPMI control with kernel driver or LAN interface
+brew "ipmitool"
+# New file format for still image compression
+brew "jpeg-xl"
+# Lightweight and flexible command-line JSON processor
+brew "jq"
+# Open-source, cross-platform JavaScript runtime environment
+brew "node"
+# JSON parser and validator with a CLI
+brew "jsonlint"
+# Fast, Dynamic Programming Language
+brew "julia"
+# Handy way to save and run project-specific commands
+brew "just"
+# Run local Kubernetes cluster in Docker
+brew "kind"
+# Static analysis tool for Kubernetes YAML files and Helm charts
+brew "kube-linter"
+# FAST Kubernetes manifests validator, with support for Custom Resources!
+brew "kubeconform"
+# Kubernetes command-line interface
+brew "kubernetes-cli"
+# Fast, flexible, config-based cli for linting Markdown/CommonMark files
+brew "markdownlint-cli2"
+# Small build system for use with gyp or CMake
+brew "ninja"
+# Fast and user friendly build system
+brew "meson"
+# 'traceroute' and 'ping' in a single tool
+brew "mtr"
+# Ambitious Vim-fork focused on extensibility and agility
+brew "neovim"
+# HTTP(S) server and reverse proxy, and IMAP/POP3 proxy server
+brew "nginx"
+# Port scanning utility for large networks
+brew "nmap"
+# Optimized BLAS library
+brew "openblas"
+# OpenShift command-line interface tools
+brew "openshift-cli"
+# Vulnerability scanner which uses the OSV database
+brew "osv-scanner"
+# High-performance linter for JavaScript and TypeScript written in Rust
+brew "oxlint"
+# PDF rendering library (based on the xpdf-3.0 code base)
+brew "poppler"
+# Reads arbitrary PDF files and generates an XML file readable by Ipe
+brew "pdftoipe"
+# Package compiler and linker metadata toolkit
+brew "pkgconf"
+# Fast, disk space efficient package manager
+brew "pnpm"
+# Framework for managing multi-language pre-commit hooks
+brew "pre-commit"
+# Code formatter for JavaScript, CSS, JSON, GraphQL, Markdown, YAML
+brew "prettier"
+# Interpreted, interactive, object-oriented programming language
+brew "python@3.11"
+# Rsync for cloud storage
+brew "rclone"
+# Search tool like grep and The Silver Searcher
+brew "ripgrep"
+# Powerful, clean, object-oriented scripting language
+brew "ruby"
+# Extremely fast Python linter, written in Rust
+brew "ruff"
+# Rust toolchain installer
+brew "rustup"
+# Easily detect and prevent bugs and anti-patterns in your codebase
+brew "semgrep"
+# Autoformat shell script source code
+brew "shfmt"
+# SOund eXchange: universal sound sample translator
+brew "sox"
+# Non-interactive SSH password auth
+brew "sshpass"
+# TOML toolkit written in Rust
+brew "taplo"
+# User interface to the TELNET protocol
+brew "telnet"
+# Terminal multiplexer
+brew "tmux"
+# Display directories as trees (with optional color/HTML output)
+brew "tree"
+# Vulnerability scanner for container images, file systems, and Git repos
+brew "trivy"
+# Source code spell checker
+brew "typos-cli"
+# Extremely fast Python package installer and resolver, written in Rust
+brew "uv"
+# Visual Binary Diff
+brew "vbindiff"
+# C++ Library Manager
+brew "vcpkg"
+# Vi 'workalike' with many additional features
+brew "vim"
+# Executes a program periodically, showing output fullscreen
+brew "watch"
+# Internet file retriever
+brew "wget"
+# Tools for the WireGuard secure network tunnel
+brew "wireguard-tools"
+# Linter for YAML files
+brew "yamllint"
+# Process YAML, JSON, XML, CSV and properties documents from the CLI
+brew "yq"
+# Find security issues in GitHub Actions setups
+brew "zizmor"
+# General-purpose lossless data-compression library
+brew "zlib"
+# Free and open-source web browser
+cask "chromium"
+# Set of tools to manage resources and applications hosted on Google Cloud
+cask "gcloud-cli"
+# Free cross-platform office suite, fresh version
+cask "libreoffice"
+# Full TeX Live distribution without GUI applications
+cask "mactex-no-gui"
