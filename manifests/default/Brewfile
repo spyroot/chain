@@ -6,6 +6,10 @@ brew "actionlint"
 brew "aom"
 # Bourne-Again SHell, a UNIX command interpreter
 brew "bash"
+# C library of Git core methods that is re-entrant and linkable
+brew "libgit2"
+# Clone of cat(1) with syntax highlighting and Git integration
+brew "bat"
 # Bash Automated Testing System
 brew "bats-core"
 # Generate compilation database for clang tooling
@@ -48,8 +52,6 @@ brew "cmocka"
 brew "coreutils"
 # Static analysis of C and C++ code
 brew "cppcheck"
-# C library of Git core methods that is re-entrant and linkable
-brew "libgit2"
 # Cross-platform C and C++ unit testing framework for the 21st century
 brew "criterion"
 # Get a file from an HTTP, HTTPS or FTP server

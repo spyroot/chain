@@ -35,10 +35,40 @@ scripts/toolchain.sh apply --confirm  # install everything missing
 ```
 
 `apply` only ever installs what is missing — it never uninstalls, never
-upgrades existing packages, and is safe to re-run. If a prerequisite is
-absent (Homebrew itself, Miniconda), the script exits 3 with a
-`BLOCKER:`/`SAFE_NEXT_STEP:` pair on stderr telling you the exact bootstrap
-command to run first; those two installers are deliberately left manual.
+upgrades existing packages, and is safe to re-run. On a fresh mac only
+Homebrew itself is a manual step (its installer needs your password):
+`apply --confirm` exits 3 with a `BLOCKER:`/`SAFE_NEXT_STEP:` pair naming
+the exact command. Everything else bootstraps in one run: a missing
+Miniconda is installed automatically (official batch installer into
+`~/miniconda3` — no prompts, no sudo), and rustup/npm are re-checked after
+the brew phase since the Brewfile itself installs them. Components whose
+tool is still unavailable are skipped and listed in the `blocked` JSON
+field (exit 3) instead of aborting the rest of the run.
+
+`--only`/`--skip` narrow an apply to exact item names when you don't want
+the whole manifest, e.g. `apply --confirm --only jq,ripgrep` or
+`apply --confirm --skip mactex-no-gui,libreoffice`.
+
+On a terminal the tool shows human-friendly progress (icons, per-action
+bars); on a pipe stdout is one JSON object per run. `--pretty`/`--json`
+force either mode.
+
+## Dotfiles
+
+The `dotfiles` component replicates shell/editor/tool configs. It
+activates when `manifests/<profile>/dotfiles.list` exists — a
+user-authored list of `$HOME`-relative paths (`!path` excludes regenerable
+payload such as `.vim/plugged`; `#` comments). `capture` copies the listed
+paths into the manifest, always strips `oauth_token` lines from gh's yml
+files, and refuses (exit 3) if gitleaks finds secrets in the captured
+payload — this repo is public, nothing secret may enter it. `.zshrc` is
+deliberately not listed yet for exactly that reason (see the comments in
+dotfiles.list for how to enable it). `apply` overlay-copies the payload
+into `$HOME`: listed files are overwritten to match the manifest, but
+files that exist only on the target (vim plugins, caches, local extras)
+are never touched or deleted. Framework installs themselves (oh-my-zsh,
+vim-plug's plugged/, nvim lazy plugins) are not shipped — their configs
+and lockfiles are, and the frameworks restore the rest on first run.
 The same blocker fires when a tool is present but its inventory command
 fails (`tool_error` in the JSON) — acting on unknown installed state would
 reinstall, and thereby upgrade, everything. `capture` stages to a temp dir

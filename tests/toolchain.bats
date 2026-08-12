@@ -100,11 +100,18 @@ esac
 exit 0
 EOF
 
-  chmod +x "$STUBS"/brew "$STUBS"/conda "$STUBS"/rustup "$STUBS"/npm
+  cat >"$STUBS/gitleaks" <<'EOF'
+#!/bin/bash
+echo "gitleaks $*" >>"$STUB_LOG"
+exit 0
+EOF
+
+  chmod +x "$STUBS"/brew "$STUBS"/conda "$STUBS"/rustup "$STUBS"/npm "$STUBS"/gitleaks
   export CHAIN_BREW="$STUBS/brew"
   export CHAIN_CONDA="$STUBS/conda"
   export CHAIN_RUSTUP="$STUBS/rustup"
   export CHAIN_NPM="$STUBS/npm"
+  export CHAIN_GITLEAKS="$STUBS/gitleaks"
 
   seed_default_data
 }
@@ -500,29 +507,257 @@ capture() {
   echo "$output" | "$JQ" -e '.actions_failed == 1 and (.failed[0] | contains("demo"))'
 }
 
-@test "apply --confirm blocks (exit 3) when conda is missing" {
+@test "apply --confirm bootstraps miniconda when conda is missing (issue #1)" {
   capture
-  printf 'nv72\n' >"$STUB_DATA/conda_envs"
-  run env CHAIN_CONDA=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  FAKECONDA="$BATS_TEST_TMPDIR/fakeconda"
+  cat >"$BATS_TEST_TMPDIR/bootstrap" <<EOF
+#!/bin/bash
+echo "bootstrap ran" >>"\$STUB_LOG"
+cp "$STUBS/conda" "$FAKECONDA" && chmod +x "$FAKECONDA"
+: >"\$STUB_DATA/conda_envs"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bootstrap"
+  run --separate-stderr env CHAIN_CONDA="$FAKECONDA" \
+    CHAIN_CONDA_BOOTSTRAP="$BATS_TEST_TMPDIR/bootstrap" \
+    "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.blocked == [] and .actions_failed == 0 and .actions_ok == 3'
+  grep -q 'bootstrap ran' "$STUB_LOG"
+  grep -q 'conda env create -n demo' "$STUB_LOG"
+  grep -q 'conda env create -n nv72' "$STUB_LOG"
+}
+
+@test "apply --confirm reports conda blocked when the bootstrap fails" {
+  capture
+  run --separate-stderr env CHAIN_CONDA=/nonexistent CHAIN_CONDA_BOOTSTRAP=/usr/bin/false \
+    "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 3 ]
+  echo "$output" | "$JQ" -e '.blocked == ["conda"] and .actions_failed == 1'
+  [[ "$stderr" == *"BLOCKED"* ]]
+}
+
+@test "apply --confirm continues past a blocked rustup and still applies brew drift" {
+  capture
+  printf 'jq\n' >"$STUB_DATA/formulae"
+  printf 'jq\n' >"$STUB_DATA/leaves"
+  : >"$STUB_LOG"
+  run --separate-stderr env CHAIN_RUSTUP=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 3 ]
+  echo "$output" | "$JQ" -e '.blocked == ["rustup"] and .actions_ok == 1'
+  grep -q 'brew install gcc' "$STUB_LOG"
+  [[ "$stderr" == *"BLOCKED"* ]]
+}
+
+@test "apply --confirm reports npm blocked when missing" {
+  capture
+  run --separate-stderr env CHAIN_NPM=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 3 ]
+  echo "$output" | "$JQ" -e '.blocked == ["npm"]'
+}
+
+@test "apply --confirm still hard-blocks when brew itself is missing" {
+  capture
+  run env CHAIN_BREW=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
   [ "$status" -eq 3 ]
   [[ "$output" == *"BLOCKER"* ]]
   [[ "$output" == *"SAFE_NEXT_STEP"* ]]
 }
 
-@test "apply --confirm blocks (exit 3) when rustup is missing" {
+@test "apply --confirm --only installs just the named items" {
   capture
-  run env CHAIN_RUSTUP=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
-  [ "$status" -eq 3 ]
-  [[ "$output" == *"BLOCKER"* ]]
-  [[ "$output" == *"rustup"* ]]
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  printf 'nv72\n' >"$STUB_DATA/conda_envs"
+  : >"$STUB_LOG"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm --only jq
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_ok == 1 and .blocked == []'
+  grep -q 'brew install jq' "$STUB_LOG"
+  ! grep -q 'brew install gcc' "$STUB_LOG"
+  ! grep -q 'env create' "$STUB_LOG"
 }
 
-@test "apply --confirm blocks (exit 3) when npm is missing" {
+@test "apply --confirm --skip leaves the named items alone" {
   capture
-  run env CHAIN_NPM=/nonexistent "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  : >"$STUB_LOG"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm --skip gcc
+  [ "$status" -eq 0 ]
+  grep -q 'brew install jq' "$STUB_LOG"
+  ! grep -q 'brew install gcc' "$STUB_LOG"
+}
+
+@test "apply --only does not trigger the conda bootstrap" {
+  capture
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  : >"$STUB_LOG"
+  run --separate-stderr env CHAIN_CONDA=/nonexistent CHAIN_CONDA_BOOTSTRAP=/usr/bin/false \
+    "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm --only gcc
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.blocked == [] and .actions_ok == 1'
+  ! grep -q 'bootstrap' "$STUB_LOG"
+}
+
+@test "apply plan respects --only" {
+  capture
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --only jq
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.missing_total == 1 and .components.brew.missing_formulae == ["jq"]'
+}
+
+@test "--only and --skip are rejected for check and capture" {
+  run "$SCRIPT" check --only jq
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" capture --skip jq
+  [ "$status" -eq 2 ]
+}
+
+# ---------------------------------------------------------------- dotfiles --
+
+seed_fake_home() {
+  FAKEHOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$FAKEHOME/.vim/plugged/bigplugin" "$FAKEHOME/.config/gh"
+  echo 'set number' >"$FAKEHOME/.vimrc"
+  echo 'call plug#begin()' >"$FAKEHOME/.vim/autoload.vim"
+  echo 'huge plugin blob' >"$FAKEHOME/.vim/plugged/bigplugin/plugin.vim"
+  printf 'github.com:\n    user: spyroot\n' >"$FAKEHOME/.config/gh/hosts.yml"
+  mkdir -p "$MANIFEST"
+  printf '.vimrc\n.vim\n!.vim/plugged\n.config/gh\n' >"$MANIFEST/dotfiles.list"
+}
+
+@test "capture copies dotfiles, applies excludes, scrubs gh tokens" {
+  seed_fake_home
+  printf '    oauth_token: gho_FAKETESTTOKEN1234567890abcdef\n' >>"$FAKEHOME/.config/gh/hosts.yml"
+  run env HOME="$FAKEHOME" "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+  [ -f "$MANIFEST/dotfiles/.vimrc" ]
+  [ -f "$MANIFEST/dotfiles/.vim/autoload.vim" ]
+  [ ! -d "$MANIFEST/dotfiles/.vim/plugged" ]
+  [ -f "$MANIFEST/dotfiles/.config/gh/hosts.yml" ]
+  ! grep -q 'oauth_token' "$MANIFEST/dotfiles/.config/gh/hosts.yml"
+  grep -q 'user: spyroot' "$MANIFEST/dotfiles/.config/gh/hosts.yml"
+}
+
+@test "check flags differing dotfiles but ignores target-only files" {
+  seed_fake_home
+  run env HOME="$FAKEHOME" "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+  echo 'set nonumber' >"$FAKEHOME/.vimrc"
+  echo 'local extra' >"$FAKEHOME/.vim/localonly.vim"
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" check --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 1 ]
+  echo "$output" | "$JQ" -e '.components.dotfiles.missing_dotfiles == [".vimrc"]'
+}
+
+@test "apply --confirm syncs dotfiles without touching unlisted target files" {
+  seed_fake_home
+  run env HOME="$FAKEHOME" "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+  echo 'set nonumber' >"$FAKEHOME/.vimrc"
+  echo 'local extra' >"$FAKEHOME/.vim/localonly.vim"
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components dotfiles --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_ok == 1 and .actions_failed == 0'
+  grep -q 'set number' "$FAKEHOME/.vimrc"
+  [ -f "$FAKEHOME/.vim/localonly.vim" ]
+  [ -f "$FAKEHOME/.vim/plugged/bigplugin/plugin.vim" ]
+  run env HOME="$FAKEHOME" "$SCRIPT" check --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+}
+
+@test "capture blocks (exit 3) when the secret scan finds leaks" {
+  seed_fake_home
+  cat >"$BATS_TEST_TMPDIR/fakeleaks" <<'EOF'
+#!/bin/bash
+echo "leak found" >&2
+exit 1
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/fakeleaks"
+  run env HOME="$FAKEHOME" CHAIN_GITLEAKS="$BATS_TEST_TMPDIR/fakeleaks" \
+    "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
   [ "$status" -eq 3 ]
   [[ "$output" == *"BLOCKER"* ]]
-  [[ "$output" == *"npm"* ]]
+  [[ "$output" == *"secrets detected"* ]]
+  [ ! -d "$MANIFEST/dotfiles" ]
+}
+
+@test "capture warns and continues when gitleaks is unavailable" {
+  seed_fake_home
+  run env HOME="$FAKEHOME" CHAIN_GITLEAKS=/nonexistent \
+    "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not secret-scanned"* ]]
+  [ -f "$MANIFEST/dotfiles/.vimrc" ]
+}
+
+@test "check treats an unreadable dotfile target as drift, not in-sync" {
+  seed_fake_home
+  run env HOME="$FAKEHOME" "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 0 ]
+  chmod 000 "$FAKEHOME/.vimrc"
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" check --manifest-dir "$MANIFEST" --components dotfiles
+  chmod 644 "$FAKEHOME/.vimrc"
+  [ "$status" -eq 1 ]
+  echo "$output" | "$JQ" -e '.components.dotfiles.missing_dotfiles == [".vimrc"]'
+}
+
+@test "empty --only, --skip, or --components values are usage errors" {
+  run "$SCRIPT" apply --only ""
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" apply --skip ""
+  [ "$status" -eq 2 ]
+  run "$SCRIPT" check --components ""
+  [ "$status" -eq 2 ]
+}
+
+@test "apply --confirm --pretty shows progress markers and no JSON" {
+  capture
+  printf 'jq\n' >"$STUB_DATA/formulae"
+  printf 'jq\n' >"$STUB_DATA/leaves"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm --pretty
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[1/1] brew install gcc"* ]]
+  [[ "$output" == *"✅"* ]]
+  [[ "$output" != *'"command"'* ]]
+}
+
+@test "malicious dotfiles.list entries are rejected (exit 2)" {
+  seed_fake_home
+  printf '../evil\n' >"$MANIFEST/dotfiles.list"
+  run env HOME="$FAKEHOME" "$SCRIPT" capture --manifest-dir "$MANIFEST" --components dotfiles
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid dotfiles.list entry"* ]]
+}
+
+@test "dotfiles component is inert when no dotfiles.list exists" {
+  capture
+  run --separate-stderr "$SCRIPT" check --manifest-dir "$MANIFEST"
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.status == "in-sync" and .components.dotfiles == null'
+}
+
+# ------------------------------------------------------------ pretty mode --
+
+@test "--pretty produces human output with no JSON" {
+  capture
+  run --separate-stderr "$SCRIPT" check --manifest-dir "$MANIFEST" --pretty
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"in sync"* ]]
+  [[ "$output" != *'"command"'* ]]
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --pretty
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"plan only"* ]]
+}
+
+@test "--json keeps machine output" {
+  capture
+  run --separate-stderr "$SCRIPT" check --manifest-dir "$MANIFEST" --json
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.command == "check"'
 }
 
 @test "apply --confirm blocks (exit 3) when brew inventory is failing" {

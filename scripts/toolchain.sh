@@ -14,15 +14,17 @@
 # Contract (agent-grade):
 #   - Non-interactive: never prompts; mutation requires --confirm.
 #   - Idempotent: apply only installs what is missing; safe to re-run blind.
-#   - stdout = one JSON object per run (a {"status":"error"} object on
-#     fatal failures); all diagnostics go to stderr.
+#   - stdout = one JSON object per run when piped (a {"status":"error"}
+#     object on fatal failures); on a TTY a human-pretty rendering
+#     replaces it (--json restores the JSON contract, --pretty forces the
+#     human one). All diagnostics go to stderr.
 #   - Exit codes: 0 ok/in-sync; 1 drift or action failure; 2 usage error;
 #     3 BLOCKER (missing prerequisite — SAFE_NEXT_STEP printed to stderr).
 #   - Zero hidden state: input is the manifest dir + flags + CHAIN_* env
 #     overrides only.
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.5.0"
 
 SCRIPT_PATH="$0"
 case "$SCRIPT_PATH" in
@@ -33,14 +35,60 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 MANIFEST_DIR="$REPO_ROOT/manifests/default"
-COMPONENTS="brew conda rustup npm"
+COMPONENTS="brew conda rustup npm dotfiles"
 CONFIRM=0
+ONLY_ITEMS=""
+SKIP_ITEMS=""
 WORKDIR=""
 CURRENT_CMD=""
 JSON_EMITTED=0
+FORCE_MODE=""
+PRETTY=0
+ACTION_N=0
+ACTION_TOTAL=0
 
 # ---------------------------------------------------------------- logging ---
 log() { printf '%s\n' "$*" >&2; }
+
+# ----------------------------------------------------------- pretty output ---
+# On a terminal the tool talks to a human: icons, progress, no JSON. On a
+# pipe (agents, scripts) stdout stays exactly one JSON object per run.
+# --pretty / --json force either mode.
+resolve_pretty() {
+	case "$FORCE_MODE" in
+	json) PRETTY=0 ;;
+	pretty) PRETTY=1 ;;
+	*) if [ -t 1 ]; then PRETTY=1; else PRETTY=0; fi ;;
+	esac
+}
+ui() {
+	[ "$PRETTY" -eq 1 ] || return 0
+	printf '%s\n' "$*"
+}
+uin() {
+	[ "$PRETTY" -eq 1 ] || return 0
+	printf '%s' "$*"
+}
+icon_of() {
+	case "$1" in
+	brew) printf '🍺' ;;
+	conda) printf '🐍' ;;
+	rustup) printf '🦀' ;;
+	npm) printf '📦' ;;
+	dotfiles) printf '🏠' ;;
+	esac
+}
+bar() {
+	# $1 = done, $2 = total -> a ▰▰▰▱▱-style 12-slot progress bar
+	local w=12 fill=0 i=0 out=""
+	[ "$2" -gt 0 ] && fill=$(($1 * w / $2))
+	[ "$fill" -gt "$w" ] && fill=$w
+	while [ "$i" -lt "$w" ]; do
+		if [ "$i" -lt "$fill" ]; then out="${out}▰"; else out="${out}▱"; fi
+		i=$((i + 1))
+	done
+	printf '%s' "$out"
+}
 
 usage() {
 	cat <<EOF
@@ -50,7 +98,8 @@ Audience: both (agent | human). JSON on stdout, diagnostics on stderr.
 Usage:
   toolchain.sh capture [--manifest-dir DIR] [--components a,b,..]
   toolchain.sh check   [--manifest-dir DIR] [--components a,b,..]
-  toolchain.sh apply   [--manifest-dir DIR] [--components a,b,..] [--confirm]
+  toolchain.sh apply   [--manifest-dir DIR] [--components a,b,..]
+                       [--only x,y,..] [--skip x,y,..] [--confirm]
   toolchain.sh --help | --version
 
 Subcommands:
@@ -67,12 +116,34 @@ Subcommands:
            Never uninstalls anything; extras are reported, not removed.
            Selected components absent from the manifest are skipped with a
            warning and listed in the manifest_missing JSON field.
+           With --confirm, a missing Miniconda is bootstrapped automatically
+           (official batch installer into ~/miniconda3: no prompts, no
+           sudo). A missing rustup/npm is re-checked after the brew phase
+           (which may have just installed them); components whose tool is
+           still unavailable are skipped, listed in the blocked JSON field,
+           and the run exits 3 after doing everything else it could.
+           --only/--skip filter apply to (or away from) exact item names
+           across all components, e.g.:
+             apply --confirm --only jq,ripgrep
+             apply --confirm --skip mactex-no-gui,libreoffice
 
 Components: brew (taps+formulae+casks), conda (env yamls), rustup (channels),
-            npm (global packages). Default: all.
+            npm (global packages), dotfiles (paths listed in the manifest's
+            dotfiles.list — active only when that file exists). Default: all.
+
+Output: on a terminal, human-friendly progress with icons; on a pipe, one
+JSON object on stdout. --pretty / --json force either mode.
+
+Dotfiles: dotfiles.list is user-authored, one \$HOME-relative path per
+line; '!path' lines exclude regenerable payload (e.g. .vim/plugged), '#'
+comments allowed. capture refuses (exit 3) if gitleaks finds secrets in
+the captured payload; gh yml oauth_token lines are always stripped. apply
+overlay-copies listed paths and never deletes target-only files.
 
 Env overrides (absolute paths to tool binaries, mainly for tests):
   CHAIN_BREW CHAIN_CONDA CHAIN_RUSTUP CHAIN_NPM
+  CHAIN_CONDA_BOOTSTRAP (replaces the Miniconda bootstrap command)
+  CHAIN_GITLEAKS (replaces gitleaks resolution for the dotfiles scan)
 
 Exit codes: 0 ok/in-sync; 1 drift/failure; 2 usage; 3 blocker (prerequisite
 missing — a BLOCKER/SAFE_NEXT_STEP pair is printed to stderr). Fatal
@@ -95,18 +166,25 @@ blocker() {
 }
 
 cleanup() {
-	local rc=$?
-	# if capture died between moving the old conda dir aside and promoting
+	local rc=$? d
+	# if capture died between moving an old payload dir aside and promoting
 	# the new one, put the old data back before the workdir is removed
-	if [ -n "$WORKDIR" ] && [ -d "$WORKDIR/conda.old" ] && [ ! -d "$MANIFEST_DIR/conda" ]; then
-		mv "$WORKDIR/conda.old" "$MANIFEST_DIR/conda"
-	fi
+	for d in conda dotfiles; do
+		if [ -n "$WORKDIR" ] && [ -d "$WORKDIR/$d.old" ] && [ ! -d "$MANIFEST_DIR/$d" ]; then
+			mv "$WORKDIR/$d.old" "$MANIFEST_DIR/$d"
+		fi
+	done
 	# keep the one-JSON-object-per-run contract even on fatal failures
-	if [ -n "$CURRENT_CMD" ] && [ "$JSON_EMITTED" -eq 0 ] && [ "$rc" -ne 0 ]; then
+	if [ -n "$CURRENT_CMD" ] && [ "$JSON_EMITTED" -eq 0 ] && [ "$rc" -ne 0 ] && [ "$PRETTY" -eq 0 ]; then
 		printf '{"command":"%s","status":"error","exit_code":%s}\n' \
 			"$CURRENT_CMD" "$rc"
 	fi
-	if [ -n "$WORKDIR" ]; then rm -rf "$WORKDIR"; fi
+	if [ -n "$WORKDIR" ]; then
+		# captured payloads can contain read-only trees; make them
+		# deletable so the workdir never leaks
+		chmod -R u+w "$WORKDIR" 2>/dev/null || true
+		rm -rf "$WORKDIR"
+	fi
 }
 trap cleanup EXIT
 # turn fatal signals into exits so the EXIT trap still removes $WORKDIR
@@ -276,6 +354,71 @@ has_component() {
 	case " $COMPONENTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
+# ------------------------------------------------------- dotfiles helpers ---
+# The dotfiles component activates only when <manifest>/dotfiles.list
+# exists. The list is user-authored (never regenerated by capture): one
+# $HOME-relative path per line; `!path` lines remove already-captured
+# content (regenerable payload like .vim/plugged); `#` comments allowed.
+dotfiles_configured() { [ -f "$MANIFEST_DIR/dotfiles.list" ]; }
+
+validate_dotfile_path() {
+	# $HOME-relative, no absolute paths, no .. segments — a hostile
+	# manifest must not be able to write outside $HOME
+	case "$1" in
+	/* | *..* | "") return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+dotfile_in_sync() {
+	# one-way: everything in the manifest payload must exist identically in
+	# the target; files existing only in the target (vim plugins, caches,
+	# local additions) are NOT drift. diff "trouble" (rc>=2: unreadable
+	# files, broken symlinks) counts as drift so an I/O error can never
+	# fake an in-sync verdict.
+	local out rc=0
+	out="$(LC_ALL=C diff -rq "$1" "$2" 2>/dev/null)" || rc=$?
+	[ "$rc" -ge 2 ] && return 1
+	printf '%s\n' "$out" |
+		awk -v a="Only in $2:" -v b="Only in $2/" \
+			'NF && index($0, a) != 1 && index($0, b) != 1 {found = 1} END {exit found}'
+}
+
+sync_dotfile() {
+	# overlay-copy one payload path into $HOME; never deletes target files
+	local src="$MANIFEST_DIR/dotfiles/$1" dst="$HOME/$1"
+	mkdir -p "$(dirname "$dst")"
+	if [ -d "$src" ]; then
+		mkdir -p "$dst"
+		cp -Rp "$src/." "$dst/"
+	else
+		cp -p "$src" "$dst"
+	fi
+}
+
+dotfiles_secret_scan() {
+	# gitleaks (when installed) must find no secrets in the staged
+	# dotfiles: leaks block capture so they can never reach the manifest
+	# repo, which may be public. CHAIN_GITLEAKS overrides resolution
+	# (tests); an override pointing nowhere means "not installed".
+	local gl
+	if [ -n "${CHAIN_GITLEAKS:-}" ]; then
+		gl="$CHAIN_GITLEAKS"
+		[ -x "$gl" ] || gl=""
+	else
+		gl="$(command -v gitleaks || true)"
+	fi
+	if [ -z "$gl" ]; then
+		log "capture: WARN gitleaks not installed — dotfiles not secret-scanned"
+		return 0
+	fi
+	if "$gl" dir "$1" --no-banner >&2 2>&1; then
+		return 0
+	fi
+	blocker "secrets detected in captured dotfiles (gitleaks report above)" \
+		"move the flagged values out of the file (e.g. into an untracked ~/.zshrc.local sourced from .zshrc) and re-run capture"
+}
+
 # ---------------------------------------------------------------- capture ---
 cmd_capture() {
 	local stage="$WORKDIR/stage"
@@ -325,6 +468,45 @@ cmd_capture() {
 		npm_globals "$npm_bin" >"$stage/npm-globals.txt"
 	fi
 
+	if has_component dotfiles && dotfiles_configured; then
+		log "capture: dotfiles (per dotfiles.list)"
+		mkdir -p "$stage/dotfiles"
+		local p ex
+		# pass 1: collect !excludes as tar -X patterns (the dir entry and
+		# its children) so excluded payload is never copied at all — some
+		# of it (e.g. go module caches under vim plugins) is read-only and
+		# cannot even be rm'd afterwards. Nested .git dirs are always
+		# excluded: committed as-is they would become empty gitlinks and
+		# the payload under them would silently not be stored.
+		printf '*/.git\n*/.git/*\n' >"$WORKDIR/dotfiles.exclude"
+		while IFS= read -r p; do
+			case "$p" in
+			'!'*)
+				ex="${p#!}"
+				validate_dotfile_path "$ex" || die_usage "invalid dotfiles.list entry: $p"
+				printf './%s\n./%s/*\n' "$ex" "$ex" >>"$WORKDIR/dotfiles.exclude"
+				;;
+			esac
+		done <"$MANIFEST_DIR/dotfiles.list"
+		# pass 2: copy each listed path, excludes applied during the copy
+		while IFS= read -r p; do
+			case "$p" in '' | '#'* | '!'*) continue ;; esac
+			validate_dotfile_path "$p" || die_usage "invalid dotfiles.list entry: $p"
+			if [ ! -e "$HOME/$p" ]; then
+				log "capture: WARN dotfile '$p' not found in \$HOME — skipped"
+				continue
+			fi
+			log "capture: dotfile $p"
+			tar -cf - -C "$HOME" -X "$WORKDIR/dotfiles.exclude" "./$p" |
+				tar -xpf - -C "$stage/dotfiles"
+		done <"$MANIFEST_DIR/dotfiles.list"
+		# some gh setups keep an oauth token in these ymls — never ship it
+		for p in "$stage/dotfiles/.config/gh/hosts.yml" "$stage/dotfiles/.config/gh/config.yml"; do
+			if [ -f "$p" ]; then sed -i '' '/oauth_token/d' "$p"; fi
+		done
+		dotfiles_secret_scan "$stage/dotfiles"
+	fi
+
 	local brew_version="unavailable"
 	[ -n "$brew_bin" ] && brew_version="$("$brew_bin" --version | head -1)"
 	cat >"$stage/meta.json" <<EOF
@@ -354,10 +536,20 @@ EOF
 	fi
 	has_component rustup && mv -f "$stage/rustup-toolchains.txt" "$MANIFEST_DIR/rustup-toolchains.txt"
 	has_component npm && mv -f "$stage/npm-globals.txt" "$MANIFEST_DIR/npm-globals.txt"
+	if has_component dotfiles && dotfiles_configured; then
+		if [ -d "$MANIFEST_DIR/dotfiles" ]; then
+			mv "$MANIFEST_DIR/dotfiles" "$WORKDIR/dotfiles.old"
+		fi
+		mv "$stage/dotfiles" "$MANIFEST_DIR/dotfiles"
+	fi
 	mv -f "$stage/meta.json" "$MANIFEST_DIR/meta.json"
 
-	printf '{"command":"capture","status":"ok","manifest_dir":"%s","components":"%s"}\n' \
-		"$(json_escape "$MANIFEST_DIR")" "$(json_escape "$COMPONENTS")"
+	if [ "$PRETTY" -eq 1 ]; then
+		ui "✅ manifest captured → $MANIFEST_DIR ($COMPONENTS)"
+	else
+		printf '{"command":"capture","status":"ok","manifest_dir":"%s","components":"%s"}\n' \
+			"$(json_escape "$MANIFEST_DIR")" "$(json_escape "$COMPONENTS")"
+	fi
 	JSON_EMITTED=1
 }
 
@@ -478,6 +670,25 @@ compute_drift() {
 		fi
 	fi
 
+	if has_component dotfiles && dotfiles_configured; then
+		: >"$WORKDIR/missing_dotfiles"
+		local p
+		while IFS= read -r p; do
+			case "$p" in '' | '#'* | '!'*) continue ;; esac
+			validate_dotfile_path "$p" || continue
+			if [ ! -e "$MANIFEST_DIR/dotfiles/$p" ]; then
+				log "check: WARN dotfile '$p' listed but never captured — run capture on the source mac"
+				continue
+			fi
+			if [ ! -e "$HOME/$p" ] || ! dotfile_in_sync "$MANIFEST_DIR/dotfiles/$p" "$HOME/$p"; then
+				echo "$p" >>"$WORKDIR/missing_dotfiles"
+			fi
+		done <"$MANIFEST_DIR/dotfiles.list"
+		sorted <"$WORKDIR/missing_dotfiles" >"$WORKDIR/missing_dotfiles.s"
+		mv "$WORKDIR/missing_dotfiles.s" "$WORKDIR/missing_dotfiles"
+		total=$((total + $(wc -l <"$WORKDIR/missing_dotfiles")))
+	fi
+
 	printf '%s' "$total"
 }
 
@@ -543,8 +754,58 @@ drift_components_json() {
 		out="$out$(drift_json_lists \
 			missing_globals="$WORKDIR/missing_npm" \
 			extra_globals="$WORKDIR/extra_npm")}"
+		first=0
+	fi
+	if has_component dotfiles && dotfiles_configured; then
+		[ $first -eq 0 ] && out="$out,"
+		out="$out\"dotfiles\":{$(component_flags_json dotfiles)"
+		out="$out$(drift_json_lists missing_dotfiles="$WORKDIR/missing_dotfiles")}"
 	fi
 	printf '%s' "$out"
+}
+
+# --------------------------------------------------------- pretty summary ---
+component_missing_count() {
+	case "$1" in
+	brew) printf '%s' "$(($(count_lines "$WORKDIR/missing_taps") + $(count_lines "$WORKDIR/missing_formulae") + $(count_lines "$WORKDIR/missing_casks")))" ;;
+	conda) count_lines "$WORKDIR/missing_envs" ;;
+	rustup) count_lines "$WORKDIR/missing_channels" ;;
+	npm) count_lines "$WORKDIR/missing_npm" ;;
+	dotfiles) count_lines "$WORKDIR/missing_dotfiles" ;;
+	esac
+}
+component_extra_count() {
+	case "$1" in
+	brew) printf '%s' "$(($(count_lines "$WORKDIR/extra_taps") + $(count_lines "$WORKDIR/extra_formulae") + $(count_lines "$WORKDIR/extra_casks")))" ;;
+	conda) count_lines "$WORKDIR/extra_envs" ;;
+	rustup) count_lines "$WORKDIR/extra_channels" ;;
+	npm) count_lines "$WORKDIR/extra_npm" ;;
+	dotfiles) printf '0' ;;
+	esac
+}
+
+pretty_drift_summary() {
+	local c m x
+	for c in $COMPONENTS; do
+		if [ "$c" = "dotfiles" ] && ! dotfiles_configured; then continue; fi
+		if [ -f "$WORKDIR/${c}_manifest_missing" ]; then
+			ui "  ⚠️  $(icon_of "$c") $c — not in this manifest"
+		elif [ -f "$WORKDIR/${c}_tool_missing" ]; then
+			ui "  🚫 $(icon_of "$c") $c — tool not installed"
+		elif [ -f "$WORKDIR/${c}_tool_error" ]; then
+			ui "  🚫 $(icon_of "$c") $c — tool present but inventory failing"
+		else
+			m="$(component_missing_count "$c")"
+			x="$(component_extra_count "$c")"
+			if [ "$m" -eq 0 ] && [ "$x" -eq 0 ]; then
+				ui "  ✅ $(icon_of "$c") $c — in sync"
+			elif [ "$x" -eq 0 ]; then
+				ui "  ❌ $(icon_of "$c") $c — $m to install"
+			else
+				ui "  ❌ $(icon_of "$c") $c — $m to install, $x extra here"
+			fi
+		fi
+	done
 }
 
 require_manifest() {
@@ -555,6 +816,7 @@ require_manifest() {
 	has_component conda && [ -f "$MANIFEST_DIR/conda/envs.txt" ] && found=1
 	has_component rustup && [ -f "$MANIFEST_DIR/rustup-toolchains.txt" ] && found=1
 	has_component npm && [ -f "$MANIFEST_DIR/npm-globals.txt" ] && found=1
+	has_component dotfiles && dotfiles_configured && found=1
 	[ "$found" -eq 1 ] ||
 		die_usage "no manifest files for components '$COMPONENTS' in $MANIFEST_DIR (run 'capture' on the source mac first)"
 }
@@ -582,51 +844,140 @@ cmd_check() {
 	if [ "$total" -eq 0 ] && [ "$extras" -eq 0 ] && ! any_degraded && ! any_manifest_missing; then
 		status="in-sync"
 	fi
-	printf '{"command":"check","status":"%s","missing_total":%s,"extra_total":%s,"manifest_dir":"%s","components":{%s}}\n' \
-		"$status" "$total" "$extras" "$(json_escape "$MANIFEST_DIR")" "$(drift_components_json)"
+	if [ "$PRETTY" -eq 1 ]; then
+		ui "🔗 chain check — $MANIFEST_DIR"
+		pretty_drift_summary
+		ui ""
+		if [ "$status" = "in-sync" ]; then
+			ui "✅ this machine matches the manifest"
+		else
+			ui "❌ drift: $total to install, $extras extra — run: toolchain.sh apply"
+		fi
+	else
+		printf '{"command":"check","status":"%s","missing_total":%s,"extra_total":%s,"manifest_dir":"%s","components":{%s}}\n' \
+			"$status" "$total" "$extras" "$(json_escape "$MANIFEST_DIR")" "$(drift_components_json)"
+	fi
 	JSON_EMITTED=1
 	[ "$status" = "in-sync" ] || exit 1
 }
 
 # ------------------------------------------------------------------- apply ---
+# apply --only/--skip exact-name filters to a list file, in place
+filter_list() {
+	local f="$1"
+	[ -f "$f" ] || return 0
+	if [ -n "$ONLY_ITEMS" ]; then
+		awk -v keep="$ONLY_ITEMS" \
+			'BEGIN { n = split(keep, a, ","); for (i = 1; i <= n; i++) k[a[i]] = 1 } $0 in k' \
+			"$f" >"$f.flt"
+		mv "$f.flt" "$f"
+	fi
+	if [ -n "$SKIP_ITEMS" ]; then
+		awk -v drop="$SKIP_ITEMS" \
+			'BEGIN { n = split(drop, a, ","); for (i = 1; i <= n; i++) d[a[i]] = 1 } !($0 in d)' \
+			"$f" >"$f.flt"
+		mv "$f.flt" "$f"
+	fi
+}
+
+blocked_component() {
+	# $1 = component, $2 = reason. Recorded in the JSON `blocked` array;
+	# the run continues and exits 3 at the end instead of aborting here.
+	log "apply: BLOCKED: $2 — component '$1' skipped"
+	log "apply: SAFE_NEXT_STEP: make the '$1' tool available (see the line above), then re-run apply"
+	echo "$1" >>"$WORKDIR/blocked"
+}
+
+conda_bootstrap_cmd() {
+	# official Miniconda batch install: non-interactive, no sudo, accepts
+	# the license via -b, lands in ~/miniconda3 where resolve_conda looks.
+	# CHAIN_CONDA_BOOTSTRAP replaces the whole step (tests use this).
+	if [ -n "${CHAIN_CONDA_BOOTSTRAP:-}" ]; then
+		"$CHAIN_CONDA_BOOTSTRAP"
+	else
+		curl -fsSL "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-$(uname -m).sh" \
+			-o "$WORKDIR/miniconda-installer.sh" &&
+			/bin/bash "$WORKDIR/miniconda-installer.sh" -b -p "$HOME/miniconda3"
+	fi
+}
+
 run_action() {
 	# $1 = human label; rest = command. Appends to ok/failed counters via
-	# files; a failed action never aborts the remaining actions.
+	# files; a failed action never aborts the remaining actions. Pretty
+	# mode shows a progress bar and hides tool chatter unless it fails.
 	local label="$1"
 	shift
-	log "apply: $label"
-	if "$@" >&2; then
-		echo "$label" >>"$WORKDIR/applied_ok"
+	ACTION_N=$((ACTION_N + 1))
+	if [ "$PRETTY" -eq 1 ]; then
+		uin "  $(bar "$ACTION_N" "$ACTION_TOTAL") [$ACTION_N/$ACTION_TOTAL] $label "
+		if "$@" >"$WORKDIR/action.log" 2>&1; then
+			ui "✅"
+			echo "$label" >>"$WORKDIR/applied_ok"
+		else
+			ui "❌"
+			tail -6 "$WORKDIR/action.log" | sed 's/^/      /' >&2
+			echo "$label" >>"$WORKDIR/applied_failed"
+		fi
 	else
-		log "apply: FAILED: $label"
-		echo "$label" >>"$WORKDIR/applied_failed"
+		log "apply: $label"
+		if "$@" >&2; then
+			echo "$label" >>"$WORKDIR/applied_ok"
+		else
+			log "apply: FAILED: $label"
+			echo "$label" >>"$WORKDIR/applied_failed"
+		fi
 	fi
 }
 
 cmd_apply() {
 	require_manifest
-	local total
+	local total ff
 	total="$(compute_drift)"
+
+	# --only/--skip narrow what apply acts on; the plan shows the same view
+	if [ -n "$ONLY_ITEMS$SKIP_ITEMS" ]; then
+		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles; do
+			filter_list "$WORKDIR/$ff"
+		done
+		total=0
+		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles; do
+			total=$((total + $(count_lines "$WORKDIR/$ff")))
+		done
+	fi
 
 	if [ "$CONFIRM" -eq 0 ]; then
 		log "apply: plan only (no --confirm); nothing was changed"
-		printf '{"command":"apply","mode":"plan","missing_total":%s,"manifest_dir":"%s","components":{%s}}\n' \
-			"$total" "$(json_escape "$MANIFEST_DIR")" "$(drift_components_json)"
+		if [ "$PRETTY" -eq 1 ]; then
+			ui "🔗 chain apply (plan) — $MANIFEST_DIR"
+			pretty_drift_summary
+			ui ""
+			ui "▫️  plan only — nothing changed; add --confirm to execute ($total to install)"
+		else
+			printf '{"command":"apply","mode":"plan","missing_total":%s,"manifest_dir":"%s","components":{%s}}\n' \
+				"$total" "$(json_escape "$MANIFEST_DIR")" "$(drift_components_json)"
+		fi
 		JSON_EMITTED=1
 		return 0
 	fi
 
-	# Prerequisite gates: refuse to act when a selected component's tool is
-	# absent, or present but failing inventory (installed state unknown —
-	# acting on it would reinstall, and thereby upgrade, everything).
+	ui "🔗 chain apply — $MANIFEST_DIR"
+	ACTION_N=0
+	ACTION_TOTAL=$total
+
+	# Prerequisite gates. Homebrew cannot be bootstrapped non-interactively
+	# (its installer needs sudo), so a missing brew stays a hard blocker.
+	# A tool that is present but failing inventory also blocks — installed
+	# state is unknown, and acting on it would reinstall (and thereby
+	# upgrade) everything. Missing conda/rustup/npm are handled per
+	# component below: conda is bootstrapped, rustup/npm may have just
+	# arrived via the brew phase, and whatever is still missing is
+	# reported as blocked instead of aborting the whole run.
 	[ -f "$WORKDIR/brew_tool_missing" ] && blocker_brew
-	[ -f "$WORKDIR/conda_tool_missing" ] && blocker_conda
-	[ -f "$WORKDIR/rustup_tool_missing" ] && blocker_rustup
-	[ -f "$WORKDIR/npm_tool_missing" ] && blocker_npm
 	[ -f "$WORKDIR/brew_tool_error" ] && blocker_inventory brew "brew list --formula"
 	[ -f "$WORKDIR/conda_tool_error" ] && blocker_inventory conda "conda env list"
 	[ -f "$WORKDIR/rustup_tool_error" ] && blocker_inventory rustup "rustup toolchain list"
 	[ -f "$WORKDIR/npm_tool_error" ] && blocker_inventory npm "npm ls -g --depth=0"
+	: >"$WORKDIR/blocked"
 
 	# a selected component absent from the manifest cannot be applied; say
 	# so loudly and carry it in the JSON instead of silently no-opping
@@ -665,47 +1016,109 @@ cmd_apply() {
 		done <"$WORKDIR/missing_casks"
 	fi
 
-	if has_component rustup && [ -f "$WORKDIR/missing_channels" ]; then
-		rustup_bin="$(resolve_rustup)" || blocker_rustup
-		while IFS= read -r item; do
-			[ -z "$item" ] || run_action "rustup toolchain install $item" "$rustup_bin" toolchain install "$item"
-		done <"$WORKDIR/missing_channels"
-	fi
-
-	if has_component npm && [ -f "$WORKDIR/missing_npm" ]; then
-		npm_bin="$(resolve_npm)" || blocker_npm
-		while IFS= read -r item; do
-			[ -z "$item" ] || run_action "npm install -g $item" "$npm_bin" install -g "$item"
-		done <"$WORKDIR/missing_npm"
-	fi
-
-	if has_component conda && [ -f "$WORKDIR/missing_envs" ]; then
-		conda_bin="$(resolve_conda)" || blocker_conda
-		while IFS= read -r item; do
-			[ -z "$item" ] && continue
-			if [ -f "$MANIFEST_DIR/conda/$item.yml" ]; then
-				run_action "conda env create $item" \
-					"$conda_bin" env create -n "$item" -f "$MANIFEST_DIR/conda/$item.yml"
+	# rustup/npm/conda resolve at ACTION time, not compute time — the brew
+	# phase above may have just installed rustup/node, and conda can be
+	# bootstrapped. Drift for these is recomputed live for the same reason.
+	if has_component rustup && [ -f "$WORKDIR/m_channels" ]; then
+		cp "$WORKDIR/m_channels" "$WORKDIR/m_channels_want"
+		filter_list "$WORKDIR/m_channels_want"
+		if [ -s "$WORKDIR/m_channels_want" ]; then
+			if ! rustup_bin="$(resolve_rustup)"; then
+				blocked_component rustup "rustup not found (brew install rustup, or add it to the Brewfile)"
+			elif ! rustup_channels "$rustup_bin" >"$WORKDIR/c_channels_now"; then
+				blocked_component rustup "rustup present but its inventory command is failing"
 			else
-				log "apply: FAILED: conda env $item (no yaml in manifest)"
-				echo "conda env create $item" >>"$WORKDIR/applied_failed"
+				missing_of "$WORKDIR/m_channels_want" "$WORKDIR/c_channels_now" >"$WORKDIR/missing_channels_now"
+				while IFS= read -r item; do
+					[ -z "$item" ] || run_action "rustup toolchain install $item" "$rustup_bin" toolchain install "$item"
+				done <"$WORKDIR/missing_channels_now"
 			fi
-		done <"$WORKDIR/missing_envs"
+		fi
 	fi
 
-	local ok failed
+	if has_component npm && [ -f "$WORKDIR/m_npm" ]; then
+		cp "$WORKDIR/m_npm" "$WORKDIR/m_npm_want"
+		filter_list "$WORKDIR/m_npm_want"
+		if [ -s "$WORKDIR/m_npm_want" ]; then
+			if ! npm_bin="$(resolve_npm)"; then
+				blocked_component npm "npm not found (brew install node, or add it to the Brewfile)"
+			elif ! npm_globals "$npm_bin" >"$WORKDIR/c_npm_now"; then
+				blocked_component npm "npm present but its inventory command is failing"
+			else
+				missing_of "$WORKDIR/m_npm_want" "$WORKDIR/c_npm_now" >"$WORKDIR/missing_npm_now"
+				while IFS= read -r item; do
+					[ -z "$item" ] || run_action "npm install -g $item" "$npm_bin" install -g "$item"
+				done <"$WORKDIR/missing_npm_now"
+			fi
+		fi
+	fi
+
+	if has_component dotfiles && [ -f "$WORKDIR/missing_dotfiles" ]; then
+		while IFS= read -r item; do
+			[ -z "$item" ] || run_action "sync dotfile $item" sync_dotfile "$item"
+		done <"$WORKDIR/missing_dotfiles"
+	fi
+
+	if has_component conda && [ -f "$WORKDIR/m_envs" ]; then
+		cp "$WORKDIR/m_envs" "$WORKDIR/m_envs_want"
+		filter_list "$WORKDIR/m_envs_want"
+		if [ -s "$WORKDIR/m_envs_want" ]; then
+			if ! conda_bin="$(resolve_conda)"; then
+				run_action "bootstrap miniconda (batch installer, no sudo)" conda_bootstrap_cmd
+				conda_bin="$(resolve_conda)" || conda_bin=""
+			fi
+			if [ -z "$conda_bin" ]; then
+				blocked_component conda "conda not found and the Miniconda bootstrap did not produce it"
+			elif ! conda_env_names "$conda_bin" >"$WORKDIR/c_envs_now"; then
+				blocked_component conda "conda present but its inventory command is failing"
+			else
+				missing_of "$WORKDIR/m_envs_want" "$WORKDIR/c_envs_now" >"$WORKDIR/missing_envs_now"
+				while IFS= read -r item; do
+					[ -z "$item" ] && continue
+					if [ -f "$MANIFEST_DIR/conda/$item.yml" ]; then
+						run_action "conda env create $item" \
+							"$conda_bin" env create -n "$item" -f "$MANIFEST_DIR/conda/$item.yml"
+					else
+						log "apply: FAILED: conda env $item (no yaml in manifest)"
+						echo "conda env create $item" >>"$WORKDIR/applied_failed"
+					fi
+				done <"$WORKDIR/missing_envs_now"
+			fi
+		fi
+	fi
+
+	local ok failed nblocked
 	ok="$(wc -l <"$WORKDIR/applied_ok" | tr -d ' ')"
 	failed="$(wc -l <"$WORKDIR/applied_failed" | tr -d ' ')"
-	printf '{"command":"apply","mode":"applied","actions_ok":%s,"actions_failed":%s,"failed":%s,"manifest_missing":%s,"manifest_dir":"%s"}\n' \
-		"$ok" "$failed" "$(json_array <"$WORKDIR/applied_failed")" \
-		"$(json_array <"$WORKDIR/apply_manifest_missing")" \
-		"$(json_escape "$MANIFEST_DIR")"
+	nblocked="$(wc -l <"$WORKDIR/blocked" | tr -d ' ')"
+	if [ "$PRETTY" -eq 1 ]; then
+		ui ""
+		ui "✅ $ok done"
+		if [ "$failed" -gt 0 ]; then
+			ui "❌ $failed failed:"
+			sed 's/^/     ❌ /' "$WORKDIR/applied_failed"
+		fi
+		if [ "$nblocked" -gt 0 ]; then
+			ui "🚫 blocked (tool unavailable): $(tr '\n' ' ' <"$WORKDIR/blocked")"
+		fi
+		if [ -s "$WORKDIR/apply_manifest_missing" ]; then
+			ui "⚠️  not in manifest: $(tr '\n' ' ' <"$WORKDIR/apply_manifest_missing")"
+		fi
+	else
+		printf '{"command":"apply","mode":"applied","actions_ok":%s,"actions_failed":%s,"failed":%s,"blocked":%s,"manifest_missing":%s,"manifest_dir":"%s"}\n' \
+			"$ok" "$failed" "$(json_array <"$WORKDIR/applied_failed")" \
+			"$(json_array <"$WORKDIR/blocked")" \
+			"$(json_array <"$WORKDIR/apply_manifest_missing")" \
+			"$(json_escape "$MANIFEST_DIR")"
+	fi
 	JSON_EMITTED=1
+	[ "$nblocked" -eq 0 ] || exit 3
 	[ "$failed" -eq 0 ] || exit 1
 }
 
 # -------------------------------------------------------------------- main ---
 main() {
+	resolve_pretty # early TTY auto-detect so even usage errors pick the right mode
 	[ $# -ge 1 ] || die_usage "missing subcommand"
 	local cmd="$1"
 	shift
@@ -732,18 +1145,36 @@ main() {
 			shift 2
 			;;
 		--components)
-			[ $# -ge 2 ] || die_usage "--components needs a value"
+			[ $# -ge 2 ] && [ -n "$2" ] || die_usage "--components needs a non-empty value"
 			COMPONENTS="$(printf '%s' "$2" | tr ',' ' ')"
 			for c in $COMPONENTS; do
 				case "$c" in
-				brew | conda | rustup | npm) : ;;
-				*) die_usage "unknown component: $c (valid: brew conda rustup npm)" ;;
+				brew | conda | rustup | npm | dotfiles) : ;;
+				*) die_usage "unknown component: $c (valid: brew conda rustup npm dotfiles)" ;;
 				esac
 			done
 			shift 2
 			;;
 		--confirm)
 			CONFIRM=1
+			shift
+			;;
+		--only)
+			[ $# -ge 2 ] && [ -n "$2" ] || die_usage "--only needs a non-empty value"
+			ONLY_ITEMS="$2"
+			shift 2
+			;;
+		--skip)
+			[ $# -ge 2 ] && [ -n "$2" ] || die_usage "--skip needs a non-empty value"
+			SKIP_ITEMS="$2"
+			shift 2
+			;;
+		--pretty)
+			FORCE_MODE="pretty"
+			shift
+			;;
+		--json)
+			FORCE_MODE="json"
 			shift
 			;;
 		--help | -h)
@@ -754,6 +1185,11 @@ main() {
 		esac
 	done
 
+	if [ "$cmd" != "apply" ] && [ -n "$ONLY_ITEMS$SKIP_ITEMS" ]; then
+		die_usage "--only/--skip are apply-only flags"
+	fi
+
+	resolve_pretty
 	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/toolchain.XXXXXX")"
 
 	case "$cmd" in

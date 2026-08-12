@@ -1,0 +1,8 @@
+let g:netrw_dirhistmax  =10
+let g:netrw_dirhistcnt =6
+let g:netrw_dirhist_6='/Users/spyroot/.codex/agents'
+let g:netrw_dirhist_5='/private/etc/defaults'
+let g:netrw_dirhist_4='/Users/spyroot/.ssh'
+let g:netrw_dirhist_3='/Users/spyroot/dev/mac_env'
+let g:netrw_dirhist_2='/Users/spyroot/dev/idrac_ctl/.git'
+let g:netrw_dirhist_1='/Users/spyroot/dev/idrac_ctl'

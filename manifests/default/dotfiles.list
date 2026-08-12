@@ -1,0 +1,19 @@
+# $HOME-relative paths replicated by the dotfiles component. This file is
+# user-authored: `capture` reads it (never rewrites it) and copies each
+# path into manifests/default/dotfiles/. Lines starting with ! remove
+# already-captured payload (regenerable content); # starts a comment.
+.vimrc
+.vim
+!.vim/plugged
+.zprofile
+.zshenv
+.p10k.zsh
+.oh-my-zsh/custom
+.config/gh
+.config/nvim
+Library/Preferences/com.googlecode.iterm2.plist
+# .zshrc is NOT captured yet: the capture-time secret scan flags it. Move
+# any secret exports into an untracked ~/.zshrc.local, source that file
+# from .zshrc, then uncomment the next line and re-run capture (the
+# gitleaks gate will verify the result is clean):
+# .zshrc
