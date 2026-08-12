@@ -12,8 +12,7 @@
 .config/gh
 .config/nvim
 Library/Preferences/com.googlecode.iterm2.plist
-# .zshrc is NOT captured yet: the capture-time secret scan flags it. Move
-# any secret exports into an untracked ~/.zshrc.local, source that file
-# from .zshrc, then uncomment the next line and re-run capture (the
-# gitleaks gate will verify the result is clean):
-# .zshrc
+# .zshrc keeps its secrets in untracked local files (~/.zshrc.local,
+# ~/.env.daedalus.local), sourced when present and never captured — copy
+# those to a new machine by hand.
+.zshrc
