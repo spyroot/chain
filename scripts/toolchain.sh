@@ -24,7 +24,7 @@
 #     overrides only.
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.5.1"
 
 SCRIPT_PATH="$0"
 case "$SCRIPT_PATH" in
@@ -304,7 +304,7 @@ tap_has_remote() {
 	# `"remote": null` (pretty-printed) for a local-only tap. On tap-info
 	# failure, keep the tap — only positive evidence of no remote drops it.
 	local info
-	info="$("$1" tap-info "$2" --json 2>/dev/null | tr -d ' \n')" || return 0
+	info="$("$1" tap-info "$2" --json </dev/null 2>/dev/null | tr -d ' \n')" || return 0
 	case "$info" in
 	*'"remote":null'*) return 1 ;;
 	*) return 0 ;;
@@ -451,7 +451,7 @@ cmd_capture() {
 		while IFS= read -r e; do
 			[ -z "$e" ] && continue
 			log "capture: conda env '$e'"
-			"$conda_bin" env export -n "$e" --no-builds |
+			"$conda_bin" env export -n "$e" --no-builds </dev/null |
 				grep -v '^prefix:' >"$stage/conda/$e.yml"
 		done <"$stage/conda/envs.txt"
 	fi
@@ -497,7 +497,7 @@ cmd_capture() {
 				continue
 			fi
 			log "capture: dotfile $p"
-			tar -cf - -C "$HOME" -X "$WORKDIR/dotfiles.exclude" "./$p" |
+			tar -cf - -C "$HOME" -X "$WORKDIR/dotfiles.exclude" "./$p" </dev/null |
 				tar -xpf - -C "$stage/dotfiles"
 		done <"$MANIFEST_DIR/dotfiles.list"
 		# some gh setups keep an oauth token in these ymls — never ship it
@@ -888,6 +888,16 @@ blocked_component() {
 	echo "$1" >>"$WORKDIR/blocked"
 }
 
+conda_accept_tos() {
+	# conda >= 25 (what Miniconda3-latest ships) refuses non-interactive
+	# env creation until Anaconda's ToS is accepted for the defaults
+	# channels (verified against conda 26.5.3: every `env create` fails
+	# with CondaToSNonInteractiveError). Older condas have no `tos`
+	# subcommand — the || true makes this a no-op there.
+	"$1" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main >/dev/null 2>&1 || true
+	"$1" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r >/dev/null 2>&1 || true
+}
+
 conda_bootstrap_cmd() {
 	# official Miniconda batch install: non-interactive, no sudo, accepts
 	# the license via -b, lands in ~/miniconda3 where resolve_conda looks.
@@ -905,12 +915,15 @@ run_action() {
 	# $1 = human label; rest = command. Appends to ok/failed counters via
 	# files; a failed action never aborts the remaining actions. Pretty
 	# mode shows a progress bar and hides tool chatter unless it fails.
+	# stdin is /dev/null: the callers loop `while read` over the very list
+	# being applied, and a stdin-consuming tool (brew!) would silently eat
+	# the remaining items.
 	local label="$1"
 	shift
 	ACTION_N=$((ACTION_N + 1))
 	if [ "$PRETTY" -eq 1 ]; then
 		uin "  $(bar "$ACTION_N" "$ACTION_TOTAL") [$ACTION_N/$ACTION_TOTAL] $label "
-		if "$@" >"$WORKDIR/action.log" 2>&1; then
+		if "$@" </dev/null >"$WORKDIR/action.log" 2>&1; then
 			ui "✅"
 			echo "$label" >>"$WORKDIR/applied_ok"
 		else
@@ -920,7 +933,7 @@ run_action() {
 		fi
 	else
 		log "apply: $label"
-		if "$@" >&2; then
+		if "$@" </dev/null >&2; then
 			echo "$label" >>"$WORKDIR/applied_ok"
 		else
 			log "apply: FAILED: $label"
@@ -1073,6 +1086,11 @@ cmd_apply() {
 				blocked_component conda "conda present but its inventory command is failing"
 			else
 				missing_of "$WORKDIR/m_envs_want" "$WORKDIR/c_envs_now" >"$WORKDIR/missing_envs_now"
+				# accept ToS only when envs will actually be created,
+				# and always before the create loop
+				if [ -s "$WORKDIR/missing_envs_now" ]; then
+					conda_accept_tos "$conda_bin"
+				fi
 				while IFS= read -r item; do
 					[ -z "$item" ] && continue
 					if [ -f "$MANIFEST_DIR/conda/$item.yml" ]; then

@@ -51,6 +51,7 @@ bundle)
     data casks | sed 's/.*/cask "&"/'
   } >"$out" ;;
 install)
+  if [ -f "$STUB_DATA/slurp_stdin" ]; then cat >/dev/null; fi
   if [ -f "$STUB_DATA/fail_brew_install" ]; then exit 1; fi ;;
 esac
 exit 0
@@ -73,7 +74,11 @@ case "$1 ${2:-}" in
   if [ -f "$STUB_DATA/fail_conda_export" ]; then exit 1; fi
   if [ -f "$STUB_DATA/slow_conda_export" ]; then sleep 5; fi
   printf 'name: %s\nchannels:\n  - defaults\ndependencies:\n  - python=3.10\nprefix: /stub/envs/%s\n' "$4" "$4" ;;
-"env create") : ;;
+"env create")
+  if [ -f "$STUB_DATA/require_tos" ] && [ ! -f "$STUB_DATA/tos_accepted" ]; then exit 1; fi ;;
+"tos accept")
+  if [ -f "$STUB_DATA/fail_conda_tos" ]; then exit 2; fi
+  touch "$STUB_DATA/tos_accepted" ;;
 esac
 exit 0
 EOF
@@ -433,7 +438,7 @@ capture() {
   run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST"
   [ "$status" -eq 0 ]
   echo "$output" | "$JQ" -e '.mode == "plan" and .missing_total == 1'
-  ! grep -qE 'brew tap [^ ]|brew install|conda env create|rustup toolchain install|npm install' "$STUB_LOG"
+  ! grep -qE 'brew tap [^ ]|brew install|conda env create|conda tos|rustup toolchain install|npm install' "$STUB_LOG"
 }
 
 @test "apply --confirm installs exactly the missing items across components" {
@@ -482,7 +487,7 @@ capture() {
   run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
   [ "$status" -eq 0 ]
   echo "$output" | "$JQ" -e '.actions_ok == 0 and .actions_failed == 0'
-  ! grep -qE 'brew tap [^ ]|brew install|conda env create|rustup toolchain install|npm install' "$STUB_LOG"
+  ! grep -qE 'brew tap [^ ]|brew install|conda env create|conda tos|rustup toolchain install|npm install' "$STUB_LOG"
 }
 
 @test "apply --confirm continues past a failed installer and reports it" {
@@ -496,6 +501,40 @@ capture() {
   [ "$status" -eq 1 ]
   echo "$output" | "$JQ" -e '.actions_ok == 1 and .actions_failed == 1 and .failed == ["brew install gcc"]'
   grep -q 'conda env create -n demo' "$STUB_LOG"
+}
+
+@test "conda envs create only after ToS acceptance (ordering by contract)" {
+  capture
+  printf 'nv72\n' >"$STUB_DATA/conda_envs"
+  touch "$STUB_DATA/require_tos"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_failed == 0 and .actions_ok == 1'
+  grep -q 'conda env create -n demo' "$STUB_LOG"
+}
+
+@test "apply succeeds when conda has no tos subcommand (old conda)" {
+  capture
+  printf 'nv72\n' >"$STUB_DATA/conda_envs"
+  touch "$STUB_DATA/fail_conda_tos"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_failed == 0 and .actions_ok == 1'
+}
+
+@test "a stdin-consuming installer does not eat the remaining work list" {
+  capture
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  printf 'nv72\n' >"$STUB_DATA/conda_envs"
+  touch "$STUB_DATA/slurp_stdin"
+  : >"$STUB_LOG"
+  run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm
+  [ "$status" -eq 0 ]
+  grep -q 'brew install gcc' "$STUB_LOG"
+  grep -q 'brew install jq' "$STUB_LOG"
+  grep -q 'conda env create -n demo' "$STUB_LOG"
+  echo "$output" | "$JQ" -e '.actions_failed == 0 and .actions_ok == 3'
 }
 
 @test "apply --confirm fails loudly when a conda yaml is absent from the manifest" {
@@ -523,6 +562,7 @@ EOF
   [ "$status" -eq 0 ]
   echo "$output" | "$JQ" -e '.blocked == [] and .actions_failed == 0 and .actions_ok == 3'
   grep -q 'bootstrap ran' "$STUB_LOG"
+  grep -q 'tos accept' "$STUB_LOG"
   grep -q 'conda env create -n demo' "$STUB_LOG"
   grep -q 'conda env create -n nv72' "$STUB_LOG"
 }
@@ -716,11 +756,13 @@ EOF
 
 @test "apply --confirm --pretty shows progress markers and no JSON" {
   capture
-  printf 'jq\n' >"$STUB_DATA/formulae"
-  printf 'jq\n' >"$STUB_DATA/leaves"
+  : >"$STUB_DATA/formulae"
+  : >"$STUB_DATA/leaves"
+  touch "$STUB_DATA/slurp_stdin"
   run --separate-stderr "$SCRIPT" apply --manifest-dir "$MANIFEST" --confirm --pretty
   [ "$status" -eq 0 ]
-  [[ "$output" == *"[1/1] brew install gcc"* ]]
+  [[ "$output" == *"[1/2] brew install gcc"* ]]
+  [[ "$output" == *"[2/2] brew install jq"* ]]
   [[ "$output" == *"✅"* ]]
   [[ "$output" != *'"command"'* ]]
 }
