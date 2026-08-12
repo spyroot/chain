@@ -782,6 +782,72 @@ EOF
   echo "$output" | "$JQ" -e '.status == "in-sync" and .components.dotfiles == null'
 }
 
+# -------------------------------------------------------------- frameworks --
+
+seed_frameworks() {
+  FAKEHOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$FAKEHOME" "$MANIFEST"
+  printf '.myfw|mkdir -p "$HOME/.myfw"\n.local/bin/mytool|mkdir -p "$HOME/.local/bin" && touch "$HOME/.local/bin/mytool"\n' \
+    >"$MANIFEST/frameworks.list"
+}
+
+@test "check reports missing frameworks as drift" {
+  seed_frameworks
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" check --manifest-dir "$MANIFEST" --components frameworks
+  [ "$status" -eq 1 ]
+  echo "$output" | "$JQ" -e '.components.frameworks.missing_frameworks == [".local/bin/mytool",".myfw"]'
+}
+
+@test "apply --confirm installs missing frameworks and is idempotent" {
+  seed_frameworks
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components frameworks --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_ok == 2 and .actions_failed == 0'
+  [ -d "$FAKEHOME/.myfw" ]
+  [ -f "$FAKEHOME/.local/bin/mytool" ]
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components frameworks --confirm
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.actions_ok == 0'
+  run env HOME="$FAKEHOME" "$SCRIPT" check --manifest-dir "$MANIFEST" --components frameworks
+  [ "$status" -eq 0 ]
+}
+
+@test "apply --skip leaves the named framework uninstalled" {
+  seed_frameworks
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components frameworks --confirm --skip .myfw
+  [ "$status" -eq 0 ]
+  [ ! -d "$FAKEHOME/.myfw" ]
+  [ -f "$FAKEHOME/.local/bin/mytool" ]
+}
+
+@test "invalid framework paths are ignored, failures are recorded" {
+  FAKEHOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$FAKEHOME" "$MANIFEST"
+  printf '../evil|touch "$HOME/pwned-marker"\n.okfw|false\n' >"$MANIFEST/frameworks.list"
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components frameworks --confirm
+  [ "$status" -eq 1 ]
+  echo "$output" | "$JQ" -e '.actions_failed == 1 and (.failed[0] | contains(".okfw"))'
+  [ ! -f "$FAKEHOME/pwned-marker" ]
+}
+
+@test "apply plan discloses framework commands and never executes them" {
+  seed_frameworks
+  run --separate-stderr env HOME="$FAKEHOME" "$SCRIPT" apply --manifest-dir "$MANIFEST" --components frameworks
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.mode == "plan" and .missing_total == 2'
+  [ ! -d "$FAKEHOME/.myfw" ]
+  [ ! -f "$FAKEHOME/.local/bin/mytool" ]
+  [[ "$stderr" == *"would run"* ]]
+  [[ "$stderr" == *"mkdir -p"* ]]
+}
+
+@test "frameworks component is inert when no frameworks.list exists" {
+  capture
+  run --separate-stderr "$SCRIPT" check --manifest-dir "$MANIFEST"
+  [ "$status" -eq 0 ]
+  echo "$output" | "$JQ" -e '.components.frameworks == null and .components.dotfiles == null'
+}
+
 # ------------------------------------------------------------ pretty mode --
 
 @test "--pretty produces human output with no JSON" {

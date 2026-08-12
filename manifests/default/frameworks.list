@@ -1,0 +1,10 @@
+# Framework installs that no package manager covers. Each line is
+# <home-relative-path>|<install command>: `apply --confirm` runs the
+# command when the path is missing; `check` reports missing paths as
+# drift. User-authored — capture never touches this file.
+#
+# oh-my-zsh via plain clone on purpose: its official installer rewrites
+# .zshrc, which the dotfiles component already provides.
+.oh-my-zsh|git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh"
+powerlevel10k|git clone --depth 1 https://github.com/romkatv/powerlevel10k.git "$HOME/powerlevel10k"
+.local/bin/claude|curl -fsSL https://claude.ai/install.sh | bash

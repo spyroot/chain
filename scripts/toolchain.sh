@@ -24,7 +24,7 @@
 #     overrides only.
 set -euo pipefail
 
-VERSION="0.5.1"
+VERSION="0.6.0"
 
 SCRIPT_PATH="$0"
 case "$SCRIPT_PATH" in
@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 MANIFEST_DIR="$REPO_ROOT/manifests/default"
-COMPONENTS="brew conda rustup npm dotfiles"
+COMPONENTS="brew conda rustup npm dotfiles frameworks"
 CONFIRM=0
 ONLY_ITEMS=""
 SKIP_ITEMS=""
@@ -76,6 +76,7 @@ icon_of() {
 	rustup) printf '🦀' ;;
 	npm) printf '📦' ;;
 	dotfiles) printf '🏠' ;;
+	frameworks) printf '🧩' ;;
 	esac
 }
 bar() {
@@ -129,7 +130,15 @@ Subcommands:
 
 Components: brew (taps+formulae+casks), conda (env yamls), rustup (channels),
             npm (global packages), dotfiles (paths listed in the manifest's
-            dotfiles.list — active only when that file exists). Default: all.
+            dotfiles.list), frameworks (installs listed in the manifest's
+            frameworks.list — e.g. oh-my-zsh, powerlevel10k, the claude
+            CLI). dotfiles/frameworks activate only when their list file
+            exists. Default: all.
+
+Frameworks: frameworks.list is user-authored, one
+'<home-relative-path>|<install command>' per line; apply --confirm runs
+the command when the path is missing, check reports missing paths as
+drift. capture never touches it.
 
 Output: on a terminal, human-friendly progress with icons; on a pipe, one
 JSON object on stdout. --pretty / --json force either mode.
@@ -361,6 +370,20 @@ has_component() {
 # content (regenerable payload like .vim/plugged); `#` comments allowed.
 dotfiles_configured() { [ -f "$MANIFEST_DIR/dotfiles.list" ]; }
 
+# ------------------------------------------------------ frameworks helpers ---
+# The frameworks component covers installs no package manager owns
+# (oh-my-zsh, powerlevel10k, the claude CLI). It activates only when
+# <manifest>/frameworks.list exists — user-authored lines of
+# `<home-relative-path>|<install command>`; the command runs under apply
+# --confirm when the path is missing.
+frameworks_configured() { [ -f "$MANIFEST_DIR/frameworks.list" ]; }
+
+framework_cmd_for() {
+	# $1 = path -> its install command (everything after the first |)
+	awk -v p="$1" 'index($0, p "|") == 1 {print substr($0, length(p) + 2); exit}' \
+		"$MANIFEST_DIR/frameworks.list"
+}
+
 validate_dotfile_path() {
 	# $HOME-relative, no absolute paths, no .. segments — a hostile
 	# manifest must not be able to write outside $HOME
@@ -479,7 +502,7 @@ cmd_capture() {
 		# excluded: committed as-is they would become empty gitlinks and
 		# the payload under them would silently not be stored.
 		printf '*/.git\n*/.git/*\n' >"$WORKDIR/dotfiles.exclude"
-		while IFS= read -r p; do
+		while IFS= read -r p || [ -n "$p" ]; do
 			case "$p" in
 			'!'*)
 				ex="${p#!}"
@@ -489,7 +512,7 @@ cmd_capture() {
 			esac
 		done <"$MANIFEST_DIR/dotfiles.list"
 		# pass 2: copy each listed path, excludes applied during the copy
-		while IFS= read -r p; do
+		while IFS= read -r p || [ -n "$p" ]; do
 			case "$p" in '' | '#'* | '!'*) continue ;; esac
 			validate_dotfile_path "$p" || die_usage "invalid dotfiles.list entry: $p"
 			if [ ! -e "$HOME/$p" ]; then
@@ -673,7 +696,7 @@ compute_drift() {
 	if has_component dotfiles && dotfiles_configured; then
 		: >"$WORKDIR/missing_dotfiles"
 		local p
-		while IFS= read -r p; do
+		while IFS= read -r p || [ -n "$p" ]; do
 			case "$p" in '' | '#'* | '!'*) continue ;; esac
 			validate_dotfile_path "$p" || continue
 			if [ ! -e "$MANIFEST_DIR/dotfiles/$p" ]; then
@@ -687,6 +710,20 @@ compute_drift() {
 		sorted <"$WORKDIR/missing_dotfiles" >"$WORKDIR/missing_dotfiles.s"
 		mv "$WORKDIR/missing_dotfiles.s" "$WORKDIR/missing_dotfiles"
 		total=$((total + $(wc -l <"$WORKDIR/missing_dotfiles")))
+	fi
+
+	if has_component frameworks && frameworks_configured; then
+		: >"$WORKDIR/missing_frameworks"
+		local fw_path fw_rest
+		while IFS='|' read -r fw_path fw_rest || [ -n "$fw_path" ]; do
+			case "$fw_path" in '' | '#'*) continue ;; esac
+			validate_dotfile_path "$fw_path" || continue
+			[ -n "$fw_rest" ] || continue
+			[ -e "$HOME/$fw_path" ] || echo "$fw_path" >>"$WORKDIR/missing_frameworks"
+		done <"$MANIFEST_DIR/frameworks.list"
+		sorted <"$WORKDIR/missing_frameworks" >"$WORKDIR/missing_frameworks.s"
+		mv "$WORKDIR/missing_frameworks.s" "$WORKDIR/missing_frameworks"
+		total=$((total + $(wc -l <"$WORKDIR/missing_frameworks")))
 	fi
 
 	printf '%s' "$total"
@@ -760,6 +797,13 @@ drift_components_json() {
 		[ $first -eq 0 ] && out="$out,"
 		out="$out\"dotfiles\":{$(component_flags_json dotfiles)"
 		out="$out$(drift_json_lists missing_dotfiles="$WORKDIR/missing_dotfiles")}"
+		first=0
+	fi
+	if has_component frameworks && frameworks_configured; then
+		[ $first -eq 0 ] && out="$out,"
+		out="$out\"frameworks\":{$(component_flags_json frameworks)"
+		out="$out$(drift_json_lists missing_frameworks="$WORKDIR/missing_frameworks")}"
+		first=0
 	fi
 	printf '%s' "$out"
 }
@@ -772,6 +816,7 @@ component_missing_count() {
 	rustup) count_lines "$WORKDIR/missing_channels" ;;
 	npm) count_lines "$WORKDIR/missing_npm" ;;
 	dotfiles) count_lines "$WORKDIR/missing_dotfiles" ;;
+	frameworks) count_lines "$WORKDIR/missing_frameworks" ;;
 	esac
 }
 component_extra_count() {
@@ -780,7 +825,7 @@ component_extra_count() {
 	conda) count_lines "$WORKDIR/extra_envs" ;;
 	rustup) count_lines "$WORKDIR/extra_channels" ;;
 	npm) count_lines "$WORKDIR/extra_npm" ;;
-	dotfiles) printf '0' ;;
+	dotfiles | frameworks) printf '0' ;;
 	esac
 }
 
@@ -788,6 +833,7 @@ pretty_drift_summary() {
 	local c m x
 	for c in $COMPONENTS; do
 		if [ "$c" = "dotfiles" ] && ! dotfiles_configured; then continue; fi
+		if [ "$c" = "frameworks" ] && ! frameworks_configured; then continue; fi
 		if [ -f "$WORKDIR/${c}_manifest_missing" ]; then
 			ui "  ⚠️  $(icon_of "$c") $c — not in this manifest"
 		elif [ -f "$WORKDIR/${c}_tool_missing" ]; then
@@ -817,6 +863,7 @@ require_manifest() {
 	has_component rustup && [ -f "$MANIFEST_DIR/rustup-toolchains.txt" ] && found=1
 	has_component npm && [ -f "$MANIFEST_DIR/npm-globals.txt" ] && found=1
 	has_component dotfiles && dotfiles_configured && found=1
+	has_component frameworks && frameworks_configured && found=1
 	[ "$found" -eq 1 ] ||
 		die_usage "no manifest files for components '$COMPONENTS' in $MANIFEST_DIR (run 'capture' on the source mac first)"
 }
@@ -949,17 +996,25 @@ cmd_apply() {
 
 	# --only/--skip narrow what apply acts on; the plan shows the same view
 	if [ -n "$ONLY_ITEMS$SKIP_ITEMS" ]; then
-		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles; do
+		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles missing_frameworks; do
 			filter_list "$WORKDIR/$ff"
 		done
 		total=0
-		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles; do
+		for ff in missing_taps missing_formulae missing_casks missing_envs missing_channels missing_npm missing_dotfiles missing_frameworks; do
 			total=$((total + $(count_lines "$WORKDIR/$ff")))
 		done
 	fi
 
 	if [ "$CONFIRM" -eq 0 ]; then
 		log "apply: plan only (no --confirm); nothing was changed"
+		# frameworks run arbitrary commands: the plan must show exactly
+		# what --confirm would execute
+		if has_component frameworks && [ -f "$WORKDIR/missing_frameworks" ]; then
+			while IFS= read -r ff || [ -n "$ff" ]; do
+				[ -z "$ff" ] && continue
+				log "plan: framework '$ff' would run: $(framework_cmd_for "$ff")"
+			done <"$WORKDIR/missing_frameworks"
+		fi
 		if [ "$PRETTY" -eq 1 ]; then
 			ui "🔗 chain apply (plan) — $MANIFEST_DIR"
 			pretty_drift_summary
@@ -1027,6 +1082,22 @@ cmd_apply() {
 			[ -n "$qual" ] || qual="$item"
 			run_action "brew install --cask $qual" "$brew_bin" install --cask "$qual"
 		done <"$WORKDIR/missing_casks"
+	fi
+
+	# frameworks next: shell/editor scaffolding (oh-my-zsh, p10k, claude
+	# CLI) that the synced dotfiles reference
+	if has_component frameworks && [ -f "$WORKDIR/missing_frameworks" ]; then
+		local fw_cmd
+		while IFS= read -r item || [ -n "$item" ]; do
+			[ -z "$item" ] && continue
+			fw_cmd="$(framework_cmd_for "$item")"
+			if [ -n "$fw_cmd" ]; then
+				run_action "install framework $item ($fw_cmd)" /bin/bash -c "$fw_cmd"
+			else
+				log "apply: FAILED: framework $item (no install command found in frameworks.list)"
+				echo "install framework $item" >>"$WORKDIR/applied_failed"
+			fi
+		done <"$WORKDIR/missing_frameworks"
 	fi
 
 	# rustup/npm/conda resolve at ACTION time, not compute time — the brew
@@ -1167,8 +1238,8 @@ main() {
 			COMPONENTS="$(printf '%s' "$2" | tr ',' ' ')"
 			for c in $COMPONENTS; do
 				case "$c" in
-				brew | conda | rustup | npm | dotfiles) : ;;
-				*) die_usage "unknown component: $c (valid: brew conda rustup npm dotfiles)" ;;
+				brew | conda | rustup | npm | dotfiles | frameworks) : ;;
+				*) die_usage "unknown component: $c (valid: brew conda rustup npm dotfiles frameworks)" ;;
 				esac
 			done
 			shift 2

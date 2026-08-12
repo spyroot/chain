@@ -53,6 +53,17 @@ On a terminal the tool shows human-friendly progress (icons, per-action
 bars); on a pipe stdout is one JSON object per run. `--pretty`/`--json`
 force either mode.
 
+## Frameworks
+
+The `frameworks` component installs the scaffolding no package manager
+owns — things the synced dotfiles reference: oh-my-zsh (plain git clone
+on purpose; its official installer would rewrite the synced `.zshrc`),
+the powerlevel10k theme clone, and the claude CLI (native installer).
+It activates when `manifests/<profile>/frameworks.list` exists:
+user-authored lines of `<home-relative-path>|<install command>`.
+`apply --confirm` runs the command when the path is missing; `check`
+reports missing paths as drift; `capture` never touches the file.
+
 ## Dotfiles
 
 The `dotfiles` component replicates shell/editor/tool configs. It
