@@ -228,6 +228,8 @@ brew "zizmor"
 brew "zlib"
 # Free and open-source web browser
 cask "chromium"
+# CaskaydiaCove Nerd Font selected by the captured iTerm2 profiles
+cask "font-caskaydia-cove-nerd-font"
 # Set of tools to manage resources and applications hosted on Google Cloud
 cask "gcloud-cli"
 # Free cross-platform office suite, fresh version

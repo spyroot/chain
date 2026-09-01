@@ -11,6 +11,7 @@
 .oh-my-zsh/custom
 .config/gh
 .config/nvim
+Library/Application Support/Code/User/settings.json
 Library/Preferences/com.googlecode.iterm2.plist
 # .zshrc keeps its secrets in untracked local files (~/.zshrc.local,
 # ~/.env.daedalus.local), sourced when present and never captured — copy

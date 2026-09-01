@@ -18,12 +18,12 @@ vim.g.mapleader = " "
 vim.g.maplocalleader = " "
 
 vim.opt.number = true
-vim.opt.relativenumber = true
+vim.opt.relativenumber = false
 vim.opt.shiftwidth = 4
 vim.opt.tabstop = 4
 vim.opt.softtabstop = 4
 vim.opt.expandtab = true
-vim.opt.mouse = "a"
+vim.opt.mouse = ""
 vim.opt.termguicolors = true
 vim.opt.clipboard = "unnamedplus"
 vim.opt.signcolumn = "yes"
@@ -122,6 +122,11 @@ require("lazy").setup({
           },
         },
       })
+
+      vim.lsp.config("taplo", {
+        capabilities = capabilities,
+      })
+      vim.lsp.enable("taplo")
 
       require("mason-lspconfig").setup(opts)
     end,
@@ -252,6 +257,29 @@ require("lazy").setup({
   },
 
   {
+    "mfussenegger/nvim-lint",
+    event = { "BufReadPre", "BufNewFile" },
+    config = function()
+      local lint = require("lint")
+
+      lint.linters_by_ft = {
+        markdown = { "markdownlint-cli2" },
+      }
+
+      local markdown_lint_group = vim.api.nvim_create_augroup("markdown_lint", { clear = true })
+
+      vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
+        group = markdown_lint_group,
+        callback = function()
+          if vim.bo.filetype == "markdown" then
+            lint.try_lint()
+          end
+        end,
+      })
+    end,
+  },
+
+  {
     "stevearc/conform.nvim",
     event = { "BufWritePre" },
     cmd = { "ConformInfo" },
@@ -273,6 +301,8 @@ require("lazy").setup({
         cpp = { "clang_format" },
         sh = { "shfmt" },
         zsh = { "shfmt" },
+        markdown = { "markdownlint-cli2" },
+        toml = { "taplo" },
         yaml = { "prettier" },
       },
       format_on_save = {
@@ -319,6 +349,9 @@ require("lazy").setup({
           "vim",
           "vimdoc",
           "bash",
+          "markdown",
+          "markdown_inline",
+          "toml",
         },
         highlight = {
           enable = true,
