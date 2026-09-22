@@ -17,9 +17,9 @@
   machine-specific YAML file with `--config`, or put it at
   `../specs/linux/network/lab_routes.yaml` for the default path. Use
   `../specs/linux/network/lab_routes.example.yaml` as a format example.
-- `linux/network/add_labdns.sh`: host-only Ubuntu split DNS. Pass a private
-  YAML file with `--config`; use `linux/network/lab_dns.example.yaml` only as
-  a format example. It does not change BIND or client-facing DNS.
+- `linux/network/add_labdns.sh`: host-only Ubuntu split DNS. It reads the
+  tracked `../specs/linux/network/lab_dns.yaml` by default; `--config FILE`
+  selects another spec. It does not change BIND or client-facing DNS.
 - `install_labmounts.sh`: Ubuntu NFS/SMB fstab CLI. The default spec is
   `../specs/linux/storage/lab_mounts.yaml`, resolved from the script location,
   not the current working directory. Pass a mount key, such as `k8s`, to select
@@ -33,5 +33,6 @@
   entries. From `scripts/`, test with `./install_labmounts.sh k8s --dry-run`.
   SMB credentials belong in a private mode-0600 file.
 
-Keep real lab addresses, credentials, SSH host entries, and private keys out of
-this public repository. The Linux route script does not configure DNS.
+Stable lab addresses and mount paths are tracked here for repeatable setup.
+Keep credentials and private keys outside the repository. The route script
+does not configure DNS.

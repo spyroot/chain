@@ -1,0 +1,12 @@
+version: 1
+interface: ens2f1
+expected_address: 192.168.254.252
+normal_dns: 192.168.254.253
+normal_search: embedings.ai
+lab_dns: 198.18.194.210
+lab_gateway: 192.168.254.253
+netplan_file: /etc/netplan/95-lab-dns.yaml
+resolved_file: /etc/systemd/resolved.conf.d/90-lab-dns.conf
+probe_name: api.ww-cai-cisco-live.dcloud.local
+domains:
+  - dcloud.local

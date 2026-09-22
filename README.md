@@ -16,9 +16,9 @@ scripts/install_labmounts.sh NFS/SMB fstab installer
 scripts/linux/network/     Ubuntu route and host split-DNS scripts
 scripts/linux/storage/     Ubuntu mount renderer
 manifests/linux/           Ubuntu apt/npm lists and portable editor files
-specs/linux/network/       route spec and safe example; no credentials
+specs/linux/network/       route and host split-DNS specs; no credentials
 specs/linux/storage/       NFS/SMB mount spec and safe example; no credentials
-scripts/README.md          script layout and private-config boundary
+scripts/README.md          script layout and credential boundary
 manifests/default/       the shared machine profile, written by `capture`
   Brewfile               taps + formulae + casks (brew bundle format)
   conda/envs.txt         conda env names; one pinned <env>.yml per env next to it
@@ -38,9 +38,9 @@ file list selects only portable Vim/Neovim files from the macOS manifest. Run
 tools, sync editor files, and restore plugins for the checkout owner (or
 `--user NAME`). The existing `--dry-run` and `--apply` flags still work; use `--json`
 for one machine-readable result. The SSH, route, DNS, and mount installers
-under `scripts/` each
-read a separate spec; keep actual host specs outside this public checkout.
-See `scripts/README.md` for their entry points and example spec paths.
+under `scripts/` each read a separate spec. Stable lab addresses and paths
+are tracked for replication; credentials and private keys are not.
+See `scripts/README.md` for their entry points and spec paths.
 
 On the source mac (this one):
 

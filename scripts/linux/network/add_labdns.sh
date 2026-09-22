@@ -2,10 +2,11 @@
 set -Eeuo pipefail
 
 # Host-only split DNS for Ubuntu with Netplan and systemd-resolved.
-# The private server and domain values live in a separate YAML spec.
+# Stable server and domain values live in the checkout's YAML spec.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-config="$script_dir/lab_dns.yaml"
+repo_root="$(cd "$script_dir/../../.." && pwd)"
+config="$repo_root/specs/linux/network/lab_dns.yaml"
 mode=dry-run
 format=text
 temp_dir=""
@@ -18,9 +19,9 @@ usage() {
     cat <<'HELP'
 Usage: add_labdns.sh [--config FILE] [--dry-run | --apply] [--json] [--help]
 
-Audience: human and agent. Run on the target Ubuntu host. FILE is a private
-YAML spec (default: lab_dns.yaml beside this script). The rule affects only
-this host's systemd-resolved; it does not modify BIND or client-facing DNS.
+Audience: human and agent. Run on the target Ubuntu host. FILE is a YAML
+spec (default: specs/linux/network/lab_dns.yaml in this checkout). The rule
+affects only this host's systemd-resolved, not BIND or client-facing DNS.
 
 --dry-run  Default. Validate the spec and render both managed fragments.
 --apply    Install the fragments, validate Netplan, activate the DNS domains,
@@ -75,7 +76,7 @@ parse_config() {
     domains=()
 
     [[ -r "$config" ]] || blocker "spec is unreadable: $config" \
-        "Pass --config FILE or put lab_dns.yaml beside this script."
+        "Pass --config FILE or restore specs/linux/network/lab_dns.yaml."
     while IFS= read -r line || [[ -n "$line" ]]; do
         line_number=$((line_number + 1))
         line="${line%$'\r'}"
@@ -150,7 +151,7 @@ parse_config() {
                 ;;
             *)
                 blocker "unsupported YAML at line $line_number" \
-                    "Use the simple key/value and two-space domain-list layout in lab_dns.example.yaml."
+                    "Use the key/value and two-space domain-list layout in specs/linux/network/lab_dns.yaml."
                 ;;
         esac
     done <"$config"
