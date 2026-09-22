@@ -1,0 +1,8 @@
+# Example only. Keep machine-specific routes in a separate private YAML file.
+version: 1
+interface: eth0
+expected_address: 192.0.2.10
+gateway: 192.0.2.1
+netplan_file: /etc/netplan/90-lab-routes.yaml
+routes:
+  - 198.51.100.0/24

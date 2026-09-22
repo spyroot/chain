@@ -1,0 +1,12 @@
+# Route plan for dns02.rnd.embedings.ai (192.168.254.252).
+# Edit this list and rerun add_lab_routes.sh; duplicates are ignored.
+version: 1
+interface: ens2f1
+expected_address: 192.168.254.252
+gateway: 192.168.254.253
+netplan_file: /etc/netplan/90-lab-routes.yaml
+routes:
+  - 10.12.2.0/24
+  - 10.100.0.0/24
+  - 172.25.0.0/16
+  - 198.18.0.0/16

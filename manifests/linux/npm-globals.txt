@@ -1,0 +1,6 @@
+# Cross-platform CLIs absent from Ubuntu's apt repository.
+# Same command family as the macOS Brewfile, not Mac-only apps.
+markdownlint-cli2
+prettier
+@biomejs/biome
+oxlint

@@ -1,0 +1,8 @@
+# Example only. Keep real host addresses and key material outside a public repo.
+Host 192.0.2.100
+  HostName 192.0.2.100
+  User example
+  TCPKeepAlive yes
+  KexAlgorithms +diffie-hellman-group1-sha1,diffie-hellman-group14-sha1
+  HostKeyAlgorithms +ssh-rsa
+  PubkeyAcceptedAlgorithms +ssh-rsa

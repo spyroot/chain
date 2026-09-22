@@ -1,0 +1,11 @@
+# dns02 lab mounts. The command argument selects a named entry below.
+# Each entry's type selects its NFS or SMB helper.
+# Review mount_point before --apply. No credentials belong in this file.
+version: 1
+mounts:
+  k8s:
+    type: nfs
+    host: 192.168.254.67
+    remote_path: /mnt/nvme/k8s
+    mount_point: /mnt/nvme/k8s
+    options: rw,_netdev,nofail,x-systemd.automount,vers=4.2

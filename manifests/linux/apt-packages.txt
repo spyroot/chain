@@ -1,0 +1,60 @@
+# Ubuntu equivalents for the shared CLI and editor basics in the macOS
+# Brewfile. This is intentionally not a copy of Mac-only casks/libraries.
+
+# Shell, editor, and everyday utilities
+bash
+bat
+curl
+fd-find
+fzf
+fonts-cascadia-code
+fonts-powerline
+git
+git-lfs
+gitleaks
+htop
+hyperfine
+jq
+just
+neovim
+ripgrep
+rsync
+tmux
+tree
+vim
+wget
+zsh
+
+# Build and development
+bear
+build-essential
+ccache
+clang-format
+cmake
+cppcheck
+golang-go
+libtool
+make
+meson
+ninja-build
+nodejs
+npm
+pipx
+pkg-config
+python3-dev
+python3-venv
+python3-yaml
+
+# Checks and operations
+bats
+cifs-utils
+gh
+ipmitool
+mtr-tiny
+nfs-common
+nmap
+pre-commit
+rclone
+shellcheck
+shfmt
+yamllint
