@@ -1,13 +1,24 @@
 # chain
 
-Replicate one mac's toolchain on another mac. One script captures this
-machine's brew/conda/rustup/npm state into a versioned manifest; the same
-script applies that manifest on a fresh machine.
+Replicate one mac's toolchain on another mac, and keep Linux setup tools in a
+separate directory. The macOS toolchain script captures this machine's
+brew/conda/rustup/npm state into a versioned manifest and applies it on a
+fresh mac.
 
 ## Layout
 
 ```
-scripts/toolchain.sh     the CLI (capture | check | apply); audience: both agent and human
+scripts/toolchain.sh        original macOS CLI (capture | check | apply)
+scripts/toolchain_mac.sh    explicit macOS alias
+scripts/toolchain_linux.sh Ubuntu apt/npm CLI (dry-run | apply)
+scripts/install_sshconfig.sh  SSH Host fragment installer
+scripts/install_labmounts.sh NFS/SMB fstab installer
+scripts/linux/network/     Ubuntu route and host split-DNS scripts
+scripts/linux/storage/     Ubuntu mount renderer
+manifests/linux/           Ubuntu apt/npm lists and portable editor files
+specs/linux/network/       route spec and safe example; no credentials
+specs/linux/storage/       NFS/SMB mount spec and safe example; no credentials
+scripts/README.md          script layout and private-config boundary
 manifests/default/       the shared machine profile, written by `capture`
   Brewfile               taps + formulae + casks (brew bundle format)
   conda/envs.txt         conda env names; one pinned <env>.yml per env next to it
@@ -18,6 +29,18 @@ tests/toolchain.bats     bats suite; all tools stubbed, never touches the machin
 ```
 
 ## Flow
+
+Ubuntu bootstrap uses the Linux-specific manifests; it does not replay
+macOS casks, VS Code settings, credentials, or Mac shell files. Its editor
+file list selects only portable Vim/Neovim files from the macOS manifest. Run
+`scripts/toolchain_linux.sh apply` to review the plan, then
+`sudo scripts/toolchain_linux.sh apply --confirm` to install missing apt/npm
+tools, sync editor files, and restore plugins for the checkout owner (or
+`--user NAME`). The existing `--dry-run` and `--apply` flags still work; use `--json`
+for one machine-readable result. The SSH, route, DNS, and mount installers
+under `scripts/` each
+read a separate spec; keep actual host specs outside this public checkout.
+See `scripts/README.md` for their entry points and example spec paths.
 
 On the source mac (this one):
 

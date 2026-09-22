@@ -1,0 +1,16 @@
+# Example only. Keep host-specific mounts and SMB credentials outside a public repo.
+version: 1
+mounts:
+  nfs_data:
+    type: nfs
+    host: 192.0.2.67
+    remote_path: /export/data
+    mount_point: /mnt/lab-data
+    options: rw,_netdev,nofail,x-systemd.automount
+  smb_shared:
+    type: smb
+    host: files.example.test
+    remote_path: /shared
+    mount_point: /mnt/lab-shared
+    options: rw,_netdev,nofail,x-systemd.automount
+    credentials_file: /etc/chain/smb-credentials

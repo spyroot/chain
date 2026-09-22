@@ -1,0 +1,13 @@
+# Example only. Keep real lab addresses in a separate private YAML file.
+version: 1
+interface: eth0
+expected_address: 192.0.2.10
+normal_dns: 192.0.2.53
+normal_search: example.test
+lab_dns: 198.51.100.53
+lab_gateway: 192.0.2.1
+netplan_file: /etc/netplan/95-lab-dns.yaml
+resolved_file: /etc/systemd/resolved.conf.d/90-lab-dns.conf
+probe_name: host.lab.example.test
+domains:
+  - lab.example.test

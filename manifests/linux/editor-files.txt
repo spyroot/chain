@@ -1,0 +1,6 @@
+# Home-relative files to take from manifests/default/dotfiles.
+# The macOS shell, GitHub auth, VS Code, and iTerm files are excluded.
+.config/nvim/init.lua
+.config/nvim/lazy-lock.json
+.vimrc
+.vim/autoload/plug.vim
